@@ -1,0 +1,5 @@
+---
+description: use eliot as default logging library, use with start_action as action pattern for logging. Avoid add_failure_fields, it does not exist. Avoid writing overly defensive code with many try and catch blocks.
+globs:
+alwaysApply: true
+---

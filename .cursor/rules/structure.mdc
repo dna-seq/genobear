@@ -1,0 +1,5 @@
+---
+description: the project is uv-based, please use uv to run stuff!
+globs:
+alwaysApply: true
+---
