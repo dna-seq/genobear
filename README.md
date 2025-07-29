@@ -1,152 +1,131 @@
-# GenoBear
+# GenoBear 🧬
 
-A powerful CLI tool for genomic data processing, built on top of the [biobear](https://github.com/wherobots/biobear) library. GenoBear focuses on providing streamlined tools to download and annotate genomic databases and VCF files.
+A unified toolkit for downloading, converting, and annotating genomic databases.
 
 ## Features
 
-- **Download genomic databases**: Automatically download and organize popular genomic databases including dbSNP, ClinVar, ANNOVAR, RefSeq, and Exomiser
-- **VCF annotation**: Annotate VCF files with multiple genomic databases simultaneously
-- **Biobear integration**: Leverages the high-performance biobear library for efficient genomic data processing
-- **Async downloads**: Fast, concurrent downloading with progress tracking
-- **Flexible configuration**: Environment-configurable defaults for all major settings
-- **Rich CLI**: User-friendly command-line interface with comprehensive help and options
+- **Download genomic databases**: dbSNP, ClinVar, ANNOVAR, RefSeq, Exomiser, and HGMD
+- **Convert VCF to Parquet**: Efficient columnar storage for large genomic datasets  
+- **Annotate VCF files**: Add variant annotations from multiple databases
+- **CLI and Python API**: Use via command line or import as a Python library
+- **Unified configuration**: Consistent database paths and discovery
+- **Streaming processing**: Handle large files efficiently with biobear
 
 ## Installation
 
-### Using uv (recommended)
-
-GenoBear is built with uv project management. If you have [uv](https://docs.astral.sh/uv/) installed:
-
 ```bash
-# Clone the repository
-git clone <repository-url>
-cd genobear
+# Using uv (recommended)
+uv add genobear
 
-# Install with uv
-uv sync
-
-# Run GenoBear
-uv run genobear --help
+# Using pip
+pip install genobear
 ```
 
-### Using pip
+## Quick Start
 
-You can also install GenoBear using pip:
+### CLI Usage
 
 ```bash
-# Install from source
-pip install -e .
+# Download and convert dbSNP database for hg38
+genobear download dbsnp hg38 --parquet
 
-# Or install dependencies manually
-pip install biobear>=0.23.7 typer>=0.16.0 polars>=1.31.0 aiohttp>=3.12.14 rich>=14.1.0
+# Download ClinVar database  
+genobear download clinvar hg38 --parquet
+
+# List available databases
+genobear annotate list
+
+# Annotate a VCF file
+genobear annotate single input.vcf.gz --assembly hg38
+
+# Batch annotate multiple VCF files
+genobear annotate batch *.vcf.gz --assembly hg38
 ```
 
-## CLI Usage
+### Python API Usage
 
-GenoBear provides two main commands: `download` and `annotate`.
+```python
+import genobear as gb
+from pathlib import Path
 
-### Basic Usage
+# Download and convert databases
+gb.download_and_convert_dbsnp(assemblies=["hg38"], releases=["b156"])
+gb.download_and_convert_clinvar(assemblies=["hg38"])
 
-```bash
-# Show help
-genobear --help
+# Annotate VCF files
+vcf_file = Path("input.vcf.gz")
+result = gb.annotate_vcf(
+    vcf_path=vcf_file,
+    database_types=["dbsnp", "clinvar"],
+    assembly="hg38"
+)
 
-# Show version
-genobear --version
-
-# Enable verbose output
-genobear --verbose <command>
-```
-
-### Download Genomic Databases
-
-Download various genomic databases for annotation:
-
-```bash
-# Download dbSNP database
-genobear download dbsnp --assembly hg38 --release b156
-
-# Download ClinVar database
-genobear download clinvar --assembly hg38
-
-# Download multiple databases
-genobear download dbsnp clinvar --assembly hg38
-
-# Download with custom output directory
-genobear download dbsnp --assembly hg38 --folder ~/my_databases/dbsnp
-
-# List available download commands
-genobear download --help
-```
-
-### Annotate VCF Files
-
-Annotate VCF files with downloaded databases:
-
-```bash
-# Annotate with dbSNP
-genobear annotate vcf input.vcf --databases dbsnp --assembly hg38
-
-# Annotate with multiple databases
-genobear annotate vcf input.vcf --databases dbsnp clinvar --assembly hg38
-
-# Specify custom database and output folders
-genobear annotate vcf input.vcf \
-  --databases dbsnp \
-  --databases-folder ~/my_databases \
-  --output-folder ~/annotations
-
-# List available annotation commands
-genobear annotate --help
+# Discover available databases
+databases = gb.discover_databases(assembly="hg38")
+print(f"Available databases: {list(databases.keys())}")
 ```
 
 ## Supported Databases
 
 - **dbSNP**: Single Nucleotide Polymorphism Database
-- **ClinVar**: Clinical Variation Database
-- **dbNSFP**: Database for Non-synonymous SNPs
-- **HGMD**: Human Gene Mutation Database
+- **ClinVar**: Clinical Variation Database  
 - **ANNOVAR**: Functional annotation databases
 - **RefSeq**: Reference Sequence Database
-- **Exomiser**: Genomic variant prioritization tool databases
+- **Exomiser**: Variant prioritization tool
+- **HGMD**: Human Gene Mutation Database (license required)
 
 ## Configuration
 
-GenoBear supports environment-based configuration. Set these environment variables to customize default behavior:
+GenoBear uses environment variables for configuration:
 
 ```bash
-# Database URLs and folders
-export GENOBEAR_DBSNP_URL="https://ftp.ncbi.nih.gov/snp/archive"
-export GENOBEAR_DBSNP_FOLDER="~/genobear/databases/dbsnp"
-export GENOBEAR_CLINVAR_FOLDER="~/genobear/databases/clinvar"
-
-# Download settings
-export GENOBEAR_MAX_CONCURRENT_DOWNLOADS="3"
-export GENOBEAR_DEFAULT_ASSEMBLY="hg38"
-export GENOBEAR_DEFAULT_DBSNP_RELEASE="b156"
-
-# Processing settings
-export GENOBEAR_PARQUET_BATCH_SIZE="100000"
+export GENOBEAR_BASE_FOLDER="~/genobear"              # Base folder for all data
+export GENOBEAR_DEFAULT_ASSEMBLY="hg38"              # Default genome assembly  
+export GENOBEAR_DEFAULT_DBSNP_RELEASE="b156"         # Default dbSNP release
+export GENOBEAR_MAX_CONCURRENT_DOWNLOADS="3"         # Concurrent downloads
+export GENOBEAR_PARQUET_BATCH_SIZE="100000"          # Parquet conversion batch size
 ```
 
-## Dependencies
+## Directory Structure
 
-GenoBear is built on top of several powerful libraries:
-
-- **[biobear](https://github.com/wherobots/biobear)** (≥0.23.7): High-performance library for bioinformatics data processing
-- **[typer](https://typer.tiangolo.com/)** (≥0.16.0): Modern CLI framework
-- **[polars](https://pola.rs/)** (≥1.31.0): Fast DataFrame library
-- **[aiohttp](https://docs.aiohttp.org/)** (≥3.12.14): Async HTTP client for downloads
-- **[rich](https://rich.readthedocs.io/)** (≥14.1.0): Rich text and beautiful formatting
+```
+~/genobear/
+├── databases/
+│   ├── dbsnp/
+│   │   └── hg38/
+│   │       └── b156/
+│   │           ├── *.vcf.gz
+│   │           └── dbsnp_hg38_b156.parquet
+│   ├── clinvar/
+│   │   └── hg38/
+│   │       └── latest/
+│   │           ├── *.vcf.gz  
+│   │           └── clinvar_hg38.parquet
+│   └── ...
+├── output/
+│   ├── vcf_files/
+│   │   ├── sample1.annotated.vcf
+│   │   └── sample2.annotated.vcf
+│   └── *.annotated.vcf
+└── logs/
+    └── genobear.log
+```
 
 ## Development
 
-This project uses:
-- **uv** for dependency management
-- **Eliot** for structured logging
-- **Type hints** throughout the codebase
-- **Async/await** for concurrent operations
+```bash
+# Clone and set up development environment
+git clone https://github.com/antonkulaga/genobear.git
+cd genobear
+uv sync
+
+# Run CLI
+uv run genobear --help
+
+# Run tests
+uv run pytest
+```
 
 ## License
 
-See LICENSE file for details.
+MIT License - see LICENSE file for details.

@@ -1,52 +1,117 @@
+"""
+GenoBear - Genomic Database Management and Annotation Tool
+
+A unified toolkit for downloading, converting, and annotating genomic databases.
+"""
+
 import typer
-from typing import Optional
-from eliot import start_action
-from pycomfort.logging import to_nice_stdout, to_nice_file
-import sys
+from eliot import start_action, to_file
 from pathlib import Path
 
+# Import main CLI apps
 from genobear.download import app as download_app
 from genobear.annotate import app as annotate_app
 
-app = typer.Typer(
-    name="genobear",
-    help="GenoBear: A powerful CLI tool for genomic data processing",
-    add_completion=False,
+# Import API functions for programmatic use
+from genobear.api import (
+    # Database download functions (sync)
+    download_dbsnp_sync, download_clinvar_sync, download_annovar_sync,
+    download_refseq_sync, download_exomiser_sync,
+    
+    # Conversion functions
+    convert_dbsnp_to_parquet_sync, convert_clinvar_to_parquet_sync,
+    convert_hgmd_to_formats,
+    
+    # Annotation functions
+    annotate_vcf, annotate_vcf_batch,
+    
+    # Discovery functions
+    discover_databases, get_available_assemblies, get_available_releases,
+    
+    # Configuration functions
+    get_database_folder, get_parquet_path, get_vcf_path,
+    list_supported_databases,
+    
+    # Convenience functions
+    download_and_convert_dbsnp, download_and_convert_clinvar,
+    
+    # Constants
+    DEFAULT_ASSEMBLY, DEFAULT_RELEASE, SUPPORTED_DATABASES
 )
 
-# Add subcommands
-app.add_typer(download_app, name="download")
-app.add_typer(annotate_app, name="annotate")
+from genobear.config import DEFAULT_LOGS_FOLDER
 
+# Version will be set dynamically by uv/hatch
+__version__ = "0.1.0"
 
-@app.callback()
-def callback(
-    verbose: bool = typer.Option(False, "--verbose", "-v", help="Enable verbose output"),
-    version: bool = typer.Option(False, "--version", help="Show version and exit"),
-) -> None:
-    """
-    GenoBear: A powerful CLI tool for genomic data processing.
+# Set up logging
+DEFAULT_LOGS_FOLDER.mkdir(parents=True, exist_ok=True)
+log_file = DEFAULT_LOGS_FOLDER / "genobear.log"
+to_file(open(log_file, "w"))
+
+# Create main CLI app
+app = typer.Typer(
+    help="GenoBear - Genomic Database Management and Annotation Tool",
+    no_args_is_help=True
+)
+
+# Add sub-commands
+app.add_typer(download_app, name="download", help="Download genomic databases")
+app.add_typer(annotate_app, name="annotate", help="Annotate VCF files with genomic databases")
+
+# Main command functions for version and info
+@app.command()
+def version():
+    """Show GenoBear version."""
+    typer.echo(f"GenoBear version {__version__}")
+
+@app.command()
+def info():
+    """Show GenoBear information and configuration."""
+    with start_action(action_type="show_info") as action:
+        typer.echo("🧬 GenoBear - Genomic Database Management and Annotation Tool")
+        typer.echo(f"Version: {__version__}")
+        typer.echo()
+        typer.echo("📁 Default Directories:")
+        typer.echo(f"  • Databases: {get_database_folder('dbsnp').parent}")
+        typer.echo(f"  • Logs: {DEFAULT_LOGS_FOLDER}")
+        typer.echo()
+        typer.echo("🗃️  Supported Databases:")
+        for db_type, description in SUPPORTED_DATABASES.items():
+            typer.echo(f"  • {db_type}: {description}")
+        typer.echo()
+        typer.echo("🔧 Default Assembly: " + DEFAULT_ASSEMBLY)
+        typer.echo("🔧 Default dbSNP Release: " + DEFAULT_RELEASE)
+        
+        action.add_success_fields(version=__version__)
+
+# Export main API functions
+__all__ = [
+    # Main CLI app
+    "app",
     
-    Provides commands for downloading genomic databases.
-    """
-    if version:
-        typer.echo("genobear 0.1.0")
-        raise typer.Exit()
+    # Database download functions
+    "download_dbsnp_sync", "download_clinvar_sync", "download_annovar_sync",
+    "download_refseq_sync", "download_exomiser_sync",
     
-    # Set up nice logging to stdout and files
-    to_nice_stdout()
+    # Conversion functions
+    "convert_dbsnp_to_parquet_sync", "convert_clinvar_to_parquet_sync",
+    "convert_hgmd_to_formats",
     
-    # Determine project root and logs directory
-    project_root = Path(__file__).resolve().parents[2]
-    log_dir = project_root / "logs"
-    log_dir.mkdir(parents=True, exist_ok=True)
+    # Annotation functions
+    "annotate_vcf", "annotate_vcf_batch",
     
-    # Define log file paths
-    json_log_path = log_dir / "genobear.log.json"
-    rendered_log_path = log_dir / "genobear.log"
+    # Discovery functions
+    "discover_databases", "get_available_assemblies", "get_available_releases",
     
-    # Configure file logging
-    to_nice_file(output_file=json_log_path, rendered_file=rendered_log_path)
+    # Configuration functions
+    "get_database_folder", "get_parquet_path", "get_vcf_path",
+    "list_supported_databases",
     
-    if verbose:
-        typer.echo("Verbose mode enabled")
+    # Convenience functions
+    "download_and_convert_dbsnp", "download_and_convert_clinvar",
+    
+    # Constants
+    "DEFAULT_ASSEMBLY", "DEFAULT_RELEASE", "SUPPORTED_DATABASES",
+    "__version__"
+]

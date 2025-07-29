@@ -44,7 +44,7 @@ async def download_file_async(
     chunk_size: int = 8192
 ) -> Optional[Path]:
     """
-    Download a file asynchronously with progress tracking.
+    Download a file asynchronously with progress tracking and CI-friendly timeout handling.
     
     Args:
         session: aiohttp ClientSession for making requests
@@ -55,38 +55,9 @@ async def download_file_async(
     Returns:
         Path to downloaded file if successful, None if failed
     """
-    with start_action(action_type="download_file", url=url, dest_path=str(dest_path)) as action:
-        try:
-            dest_path.parent.mkdir(parents=True, exist_ok=True)
-            
-            async with session.get(url) as response:
-                if response.status == 200:
-                    total_size = int(response.headers.get('content-length', 0))
-                    downloaded = 0
-                    
-                    action.log("Starting download", total_size=total_size)
-                    
-                    async with aiofiles.open(dest_path, 'wb') as file:
-                        async for chunk in response.content.iter_chunked(chunk_size):
-                            await file.write(chunk)
-                            downloaded += len(chunk)
-                            
-                            if total_size > 0:
-                                progress = (downloaded / total_size) * 100
-                                typer.echo(f"\rDownloading {dest_path.name}: {progress:.1f}%", nl=False)
-                    
-                    typer.echo(f"\n✅ Downloaded: {dest_path.name}")
-                    action.add_success_fields(downloaded_bytes=downloaded, success=True)
-                    return dest_path
-                else:
-                    action.log("HTTP error", status_code=response.status)
-                    typer.echo(f"❌ Failed to download {url}: HTTP {response.status}")
-                    return None
-                    
-        except Exception as e:
-            action.log("Download failed with exception", error=str(e))
-            typer.echo(f"❌ Error downloading {url}: {e}")
-            return None
+    # Import from utils to use enhanced version
+    from genobear.utils.download import download_file_async as enhanced_download
+    return await enhanced_download(session, url, dest_path, chunk_size)
 
 
 def construct_dbsnp_url(

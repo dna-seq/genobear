@@ -1,0 +1,5 @@
+---
+description: Always use typehints, do not use relative pathes, always use pathlib for files and typer for CLI. By default use uv as package manager.
+globs:
+alwaysApply: true
+---

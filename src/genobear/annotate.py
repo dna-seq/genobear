@@ -408,7 +408,7 @@ def annotate_single(
     output_file: Optional[Path] = typer.Option(
         None,
         "--output", "-o",
-        help="Output file path (default: input_file.annotated.parquet)"
+        help="Output file path (default: input_file.annotated.vcf)"
     ),
     join_columns: Optional[str] = typer.Option(
         "chrom,pos,ref,alt",
@@ -448,7 +448,7 @@ def annotate_single(
         
         # Set default output path
         if output_file is None:
-            output_file = vcf_file.parent / f"{vcf_file.stem}.annotated.parquet"
+            output_file = vcf_file.parent / f"{vcf_file.stem}.annotated.vcf"
         
         # Check if output exists
         if output_file.exists() and not force:
@@ -504,7 +504,7 @@ def annotate_multi(
     output_file: Optional[Path] = typer.Option(
         None,
         "--output", "-o",
-        help="Output file path (default: input_file.annotated.parquet)"
+        help="Output file path (default: input_file.annotated.vcf)"
     ),
     join_columns: Optional[str] = typer.Option(
         "chrom,pos,ref,alt",
@@ -540,7 +540,7 @@ def annotate_multi(
         
         # Set default output path
         if output_file is None:
-            output_file = vcf_file.parent / f"{vcf_file.stem}.multi_annotated.parquet"
+            output_file = vcf_file.parent / f"{vcf_file.stem}.annotated.vcf"
         
         # Check if output exists
         if output_file.exists() and not force:
@@ -686,7 +686,7 @@ def annotate_batch(
         
         # Process files
         def process_file(vcf_file: Path) -> Tuple[Path, bool]:
-            output_file = output_folder / f"{vcf_file.stem}.annotated.parquet"
+            output_file = output_folder / f"{vcf_file.stem}.annotated.vcf"
             
             if output_file.exists() and not force:
                 typer.echo(f"⏭️  Skipping existing: {output_file.name}")

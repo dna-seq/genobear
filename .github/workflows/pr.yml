@@ -1,0 +1,176 @@
+name: Pull Request Checks
+
+on:
+  pull_request:
+    branches: [ main, develop ]
+    types: [opened, synchronize, reopened, ready_for_review]
+
+env:
+  GENOBEAR_CI_MODE: "true"
+  GENOBEAR_MAX_CONCURRENT_DOWNLOADS: "1"  # More conservative for PR checks
+  GENOBEAR_DOWNLOAD_TIMEOUT: "180"  # Shorter timeout for PRs
+  PYTHONUNBUFFERED: "1"
+
+jobs:
+  pr-checks:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    if: github.event.pull_request.draft == false
+    
+    steps:
+      - name: Checkout PR code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0  # Full history for better diff analysis
+          
+      - name: Install uv
+        uses: astral-sh/setup-uv@v4
+        with:
+          version: "latest"
+          
+      - name: Set up Python 3.12
+        run: uv python install 3.12
+        
+      - name: Cache dependencies
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/uv
+          key: pr-uv-${{ hashFiles('pyproject.toml') }}
+          restore-keys: pr-uv-
+          
+      - name: Install dependencies
+        run: uv sync --dev
+        
+      - name: Code quality checks
+        run: |
+          echo "🔍 Running code quality checks..."
+          
+          # Basic import test
+          uv run python -c "
+          try:
+              import genobear
+              print('✅ GenoBear imports successfully')
+          except Exception as e:
+              print(f'❌ Import failed: {e}')
+              exit(1)
+          "
+          
+          # Check for obvious syntax errors
+          uv run python -m py_compile src/genobear/__init__.py
+          uv run python -m py_compile src/genobear/annotation/annotate.py
+          echo "✅ Core modules compile successfully"
+          
+      - name: Fast tests (no downloads)
+        run: |
+          echo "🧪 Running fast tests..."
+          uv run python -m pytest tests/ -v \
+            -k "not download and not clinvar_download_and_structure and not biobear_annotation_workflow" \
+            --tb=short \
+            --maxfail=3 \
+            -x
+            
+      - name: Pathogenicity functionality test
+        run: |
+          echo "🧬 Testing pathogenicity analysis functionality..."
+          # Test the pathogenicity extraction without requiring downloads
+          uv run python -c "
+          from genobear.annotation.annotate import extract_pathogenicity_stats
+          import polars as pl
+          
+          # Create test data
+          test_data = pl.DataFrame({
+              'info': [
+                  'CLNSIG=Pathogenic',
+                  'CLNSIG=Benign', 
+                  'CLNSIG=Uncertain_significance',
+                  'CLNSIG=Likely_pathogenic',
+                  'Some other info'
+              ]
+          })
+          
+          stats = extract_pathogenicity_stats(test_data)
+          assert stats['pathogenic'] > 0, 'Should detect pathogenic variants'
+          assert stats['benign'] > 0, 'Should detect benign variants'
+          print('✅ Pathogenicity analysis working correctly')
+          "
+          
+      - name: Check for potential issues
+        run: |
+          echo "🔍 Checking for potential issues..."
+          
+          # Check for common issues in Python code
+          if grep -r "import \*" src/; then
+            echo "⚠️  Warning: Found star imports (import *)"
+          fi
+          
+          if grep -r "print(" src/ | grep -v "demo_pathogenicity.py"; then
+            echo "⚠️  Warning: Found print statements in source code (use logging instead)"
+          fi
+          
+          # Check if tests actually test what they claim
+          if ! grep -q "pathogenic" tests/test_clinvar_annotation.py; then
+            echo "❌ Tests don't seem to check pathogenicity properly"
+            exit 1
+          fi
+          
+          echo "✅ Code quality checks passed"
+          
+      - name: Test CLI interfaces
+        run: |
+          echo "🖥️  Testing CLI interfaces..."
+          uv run genobear --help
+          uv run python -m genobear --help
+          echo "✅ CLI interfaces working"
+          
+      - name: Comment on PR
+        if: always()
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const { context } = require('@actions/github');
+            const runId = context.runId;
+            const conclusion = '${{ job.status }}';
+            
+            let message = `## 🔍 PR Checks ${conclusion === 'success' ? '✅' : '❌'}\n\n`;
+            
+            if (conclusion === 'success') {
+              message += `
+              ✅ Code imports successfully
+              ✅ Basic syntax checks passed  
+              ✅ Fast tests passed
+              ✅ Pathogenicity analysis functional
+              ✅ CLI interfaces working
+              
+              **Ready for review!** 🎉
+              `;
+            } else {
+              message += `
+              ❌ Some checks failed. Please review the [action logs](${context.payload.repository.html_url}/actions/runs/${runId}) and fix the issues.
+              
+              Common fixes:
+              - Check import statements
+              - Verify test assertions
+              - Ensure pathogenicity analysis works
+              `;
+            }
+            
+            // Only comment if checks fail, or if this is the first successful run
+            if (conclusion !== 'success') {
+              github.rest.issues.createComment({
+                issue_number: context.payload.pull_request.number,
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                body: message
+              });
+            }
+
+  draft-pr-check:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    if: github.event.pull_request.draft == true
+    
+    steps:
+      - name: Draft PR message
+        run: |
+          echo "📝 This is a draft PR - skipping full CI checks"
+          echo "Convert to ready for review to run full test suite"
