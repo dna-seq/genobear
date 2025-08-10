@@ -12,7 +12,7 @@ import polars as pl
 from eliot import start_action
 
 import genobear as gb
-from genobear.annotation.annotate import extract_pathogenicity_stats, report_pathogenicity_summary
+from genobear.old_annotation.annotate import extract_pathogenicity_stats, report_pathogenicity_summary
 
 
 def demo_pathogenicity_analysis():

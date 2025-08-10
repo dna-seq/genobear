@@ -1,11 +1,9 @@
 #!/usr/bin/env python
 
 import typer
-from typing import List, Optional, Dict, Union, Tuple
+from typing import List, Optional, Dict, Tuple
 from pathlib import Path
-import asyncio
 from eliot import start_action
-import sys
 import os
 import biobear as bb
 import pyarrow.parquet as pq

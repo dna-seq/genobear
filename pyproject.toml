@@ -8,15 +8,16 @@ authors = [
 ]
 requires-python = ">=3.10"
 dependencies = [
-    "aiofiles>=24.1.0",
-    "aiohttp>=3.12.14",
+    #"altair>=5.5.0",
     "biobear>=0.23.7",
     "eliot>=1.17.0",
-    "polars>=1.31.0",
-    "pyarrow>=21.0.0",
+    "polars-bio>=0.10.3",
+    "pooch>=1.8.2",
     "pycomfort>=0.0.18",
+    "pydantic>=2.11.7",
     "requests>=2.32.4",
     "rich>=14.1.0",
+    "rustworkx>=0.16.0",
     "typer>=0.16.0",
 ]
 
@@ -29,7 +30,33 @@ annotate = "genobear.annotate:app"
 requires = ["hatchling"]
 build-backend = "hatchling.build"
 
+[tool.hatch.build.targets.wheel]
+packages = ["src/genobear"]
+
 [dependency-groups]
 dev = [
+    "jupyterlab>=4.4.5",
+    "marimo>=0.14.13",
     "pytest>=8.4.1",
+    "python-lsp-server[all]>=1.13.0",
+    "google-genai>=1.27.0",
+    "ruff>=0.12.7",
+    "sqlglot>=27.5.1",
+    "vegafusion>=2.0.2",
+    "vl-convert-python>=1.8.0"
 ]
+
+[tool.pytest.ini_options]
+markers = [
+    "large_download: marks tests that download large files (multi-GB) - skip by default",
+    "integration: marks integration tests that require network access",
+    "slow: marks tests that take a long time to run"
+]
+
+# Default pytest behavior: verbose and no capture to allow Eliot/stdout output
+addopts = "-v -s -m 'not large_download'"
+testpaths = ["tests"]
+
+
+[tool.marimo.runtime]
+dotenv = [".env"]

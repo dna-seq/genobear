@@ -8,7 +8,7 @@ from typing import Dict, Optional
 from eliot import start_action
 
 from genobear.config import get_database_folder
-from genobear.utils.conversion import convert_to_parquet
+from genobear.databases.vcf_downloader import VCFDatabaseDownloader
 
 
 def convert_hgmd_to_formats(
@@ -71,7 +71,17 @@ def convert_hgmd_to_formats(
         if to_parquet:
             parquet_path = assembly_folder / f"{output_basename}.parquet"
             if not parquet_path.exists():
-                parquet_result = convert_to_parquet(hgmd_vcf_path, parquet_path, batch_size=batch_size)
+                # Create a temporary VcfDatabaseDownloader instance to use conversion method
+                class HgmdConverter(VCFDatabaseDownloader):
+                    @property
+                    def database_name(self) -> str:
+                        return "hgmd"
+                    
+                    def construct_url(self, version=None, **kwargs):
+                        return None  # Not used for conversion only
+                
+                converter = HgmdConverter(assembly=assembly, output_folder=output_folder)
+                parquet_result = converter.convert_to_parquet(hgmd_vcf_path, save_parquet=parquet_path)
                 results['parquet'] = parquet_result
             else:
                 action.log("Parquet file already exists", parquet_path=str(parquet_path))

@@ -1,5 +1,0 @@
----
-description: the project workspace sometimes can also include read-only biobear folder which is used to check biobear documenation and code
-globs:
-alwaysApply: false
----
