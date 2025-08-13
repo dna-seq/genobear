@@ -47,7 +47,6 @@ class VCFAnnotator(Annotator[Path, pl.LazyFrame]):
         with start_action(action_type="vcf_annotator_read", vcf_path=str(data)) as action:
             # Use read_vcf_file defaults but allow kwargs to override
             local_kwargs = dict(kwargs)
-            local_kwargs.setdefault("return_lazy", True)
             local_kwargs.setdefault("save_parquet", self.save_parquet)
             local_kwargs.setdefault("info_fields", self.info_fields)
             local_kwargs.setdefault("streaming", self.streaming)
@@ -66,3 +65,11 @@ class VCFAnnotator(Annotator[Path, pl.LazyFrame]):
             action.log(message_type="info", vcf_read_complete=True, 
                       result_type=type(result).__name__)
             return result
+
+
+if __name__ == "__main__":
+    import biobear as bb
+    from biobear.reader import Reader
+    sessions = bb.new_session()
+    sessions.read_vcf_file("/home/antonkulaga/.cache/ensembl_variation/homo_sapiens-chr21.vcf")
+    #chr21.head()

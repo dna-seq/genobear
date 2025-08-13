@@ -8,6 +8,7 @@ import tempfile
 import shutil
 from pathlib import Path
 import pooch
+from pycomfort.logging import to_nice_stdout
 
 
 def pytest_addoption(parser):
@@ -83,3 +84,10 @@ def pytest_collection_modifyitems(config, items):
         # Mark tests with 'large' in name as potentially slow
         if 'large' in item.name.lower():
             item.add_marker(pytest.mark.slow)
+
+
+@pytest.fixture(scope="session", autouse=True)
+def enable_eliot_stdout():
+    """Ensure Eliot logs are pretty-printed to stdout during the test session."""
+    to_nice_stdout()
+    yield

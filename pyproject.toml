@@ -11,6 +11,9 @@ dependencies = [
     #"altair>=5.5.0",
     "biobear>=0.23.7",
     "eliot>=1.17.0",
+    "flashtext2>=1.1.0",
+    "huggingface-hub>=0.34.4",
+    "polars>=1.17.1",
     "polars-bio>=0.10.3",
     "pooch>=1.8.2",
     "pycomfort>=0.0.18",
@@ -33,6 +36,9 @@ build-backend = "hatchling.build"
 [tool.hatch.build.targets.wheel]
 packages = ["src/genobear"]
 
+[tool.hatch.metadata]
+allow-direct-references = true
+
 [dependency-groups]
 dev = [
     "jupyterlab>=4.4.5",
@@ -53,8 +59,8 @@ markers = [
     "slow: marks tests that take a long time to run"
 ]
 
-# Default pytest behavior: verbose and no capture to allow Eliot/stdout output
-addopts = "-v -s -m 'not large_download'"
+# Default pytest behavior: extra verbose and no capture to allow Eliot/stdout output
+addopts = "-vvv -s -m 'not large_download'"
 testpaths = ["tests"]
 
 

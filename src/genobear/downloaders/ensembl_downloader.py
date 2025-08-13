@@ -10,7 +10,6 @@ from pydantic import HttpUrl, Field, field_validator, model_validator
 
 from genobear.downloaders.multi_vcf_downloader import MultiVCFDownloader
 
-
 class EnsemblDownloader(MultiVCFDownloader):
     """
     Downloader for Ensembl VCF files from the current_variation directory.
@@ -49,6 +48,12 @@ class EnsemblDownloader(MultiVCFDownloader):
     use_checksums: bool = Field(
         default=True,
         description="Whether to fetch and use checksums from the CHECKSUMS file"
+    )
+    
+    # Override parent's clean_semicolons to default to True for Ensembl data
+    clean_semicolons: bool = Field(
+        default=True, 
+        description="Whether to clean malformed semicolons (;;, ;:, ;;:) before processing VCF files. Files are modified in-place, including decompression/recompression for .gz files. Defaults to True for Ensembl data which commonly has these issues."
     )
     
     def __init__(self, **data):
@@ -222,6 +227,7 @@ class EnsemblDownloader(MultiVCFDownloader):
         cls,
         chromosomes: List[str],
         use_checksums: bool = True,
+        clean_semicolons: bool = True,
         **kwargs
     ) -> "EnsemblDownloader":
         """
@@ -230,6 +236,7 @@ class EnsemblDownloader(MultiVCFDownloader):
         Args:
             chromosomes: List of chromosome identifiers (e.g., ['1', '2', 'X'])
             use_checksums: Whether to fetch and validate checksums
+            clean_semicolons: Whether to clean malformed semicolons before processing
             **kwargs: Additional arguments passed to the constructor
             
         Returns:
@@ -238,27 +245,36 @@ class EnsemblDownloader(MultiVCFDownloader):
         return cls(
             chromosomes=chromosomes,
             use_checksums=use_checksums,
+            clean_semicolons=clean_semicolons,
             **kwargs
         )
     
     @classmethod
-    def for_autosomes_only(cls, **kwargs) -> "EnsemblDownloader":
+    def for_autosomes_only(cls, clean_semicolons: bool = True, **kwargs) -> "EnsemblDownloader":
         """
         Convenience method to create a downloader for autosomal chromosomes only.
         
+        Args:
+            clean_semicolons: Whether to clean malformed semicolons before processing
+            **kwargs: Additional arguments passed to the constructor
+            
         Returns:
             EnsemblDownloader configured for chromosomes 1-22
         """
         autosomes = [str(i) for i in range(1, 23)]
-        return cls.for_chromosomes(autosomes, **kwargs)
+        return cls.for_chromosomes(autosomes, clean_semicolons=clean_semicolons, **kwargs)
     
     @classmethod
-    def for_sex_chromosomes_only(cls, **kwargs) -> "EnsemblDownloader":
+    def for_sex_chromosomes_only(cls, clean_semicolons: bool = True, **kwargs) -> "EnsemblDownloader":
         """
         Convenience method to create a downloader for sex chromosomes only.
         
+        Args:
+            clean_semicolons: Whether to clean malformed semicolons before processing
+            **kwargs: Additional arguments passed to the constructor
+            
         Returns:
             EnsemblDownloader configured for chromosomes X and Y
         """
         sex_chromosomes = ['X', 'Y']
-        return cls.for_chromosomes(sex_chromosomes, **kwargs)
+        return cls.for_chromosomes(sex_chromosomes, clean_semicolons=clean_semicolons, **kwargs)
