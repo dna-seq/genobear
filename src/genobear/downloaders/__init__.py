@@ -6,6 +6,7 @@ from .clinvar_downloader import ClinVarDownloader
 # from .ensembl_variants_downloader import EnsemblVariantsDownloader, EnsemblVariantType
 from .multi_vcf_downloader import MultiVCFDownloader
 from .ensembl_downloader import EnsemblDownloader
+from .uploader import HuggingFaceUploader
 
 __all__ = [
     "VCFDownloader",
@@ -15,4 +16,5 @@ __all__ = [
     # "EnsemblVariantType",
     "MultiVCFDownloader",
     "EnsemblDownloader",
+    "HuggingFaceUploader",
 ]

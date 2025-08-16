@@ -1,0 +1,16 @@
+{
+	"folders": [
+		{
+			"path": "."
+		},
+		{
+			"path": "../biobear"
+		},
+		{
+			"path": "../polars-bio"
+		}
+	],
+	"settings": {
+		"marimo.marimoPath": "uv run marimo"
+	}
+}

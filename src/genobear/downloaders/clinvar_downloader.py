@@ -4,6 +4,7 @@ from typing import Literal
 from pydantic import HttpUrl, model_validator
 from genobear.downloaders.vcf_downloader import VCFDownloader
 
+#df.select(pl.col("tsa")).unique(())
 
 class ClinVarDownloader(VCFDownloader):
     """

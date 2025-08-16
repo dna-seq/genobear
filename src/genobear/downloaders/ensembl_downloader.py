@@ -2,13 +2,15 @@ from __future__ import annotations
 
 import re
 from pathlib import Path
-from typing import Dict, List, Optional, Set
+from typing import Dict, List, Optional, Set, Union
 import urllib.request
 
 from eliot import start_action
-from pydantic import HttpUrl, Field, field_validator, model_validator
+from pydantic import BaseModel, HttpUrl, Field, field_validator, model_validator
 
 from genobear.downloaders.multi_vcf_downloader import MultiVCFDownloader
+import polars as pl
+
 
 class EnsemblDownloader(MultiVCFDownloader):
     """
@@ -31,6 +33,8 @@ class EnsemblDownloader(MultiVCFDownloader):
     vcf_urls: Dict[str, str] = Field(default_factory=dict, description="Mapping of identifier (e.g. chr1) to VCF URL")
     index_urls: Optional[Dict[str, str]] = Field(default_factory=dict, description="Optional mapping of identifier to index URLs")
     known_hashes: Optional[Dict[str, str]] = Field(default=None, description="Optional mapping of identifier to known hashes")
+    cache_subdir: str = Field(default="ensembl_variations", description="Cache subdirectory for Ensembl variation data")
+    split_variant_files: bool = Field(default=False, description="Whether to split variants into multiple files, for example when we have A|G or similar")
     
     # Chromosome selection  
     chromosomes: Optional[Set[str]] = Field(
@@ -55,13 +59,6 @@ class EnsemblDownloader(MultiVCFDownloader):
         default=True, 
         description="Whether to clean malformed semicolons (;;, ;:, ;;:) before processing VCF files. Files are modified in-place, including decompression/recompression for .gz files. Defaults to True for Ensembl data which commonly has these issues."
     )
-    
-    def __init__(self, **data):
-        # Set default cache subdir if not provided
-        if 'cache_subdir' not in data:
-            data['cache_subdir'] = 'ensembl_variation'
-        
-        super().__init__(**data)
     
     @field_validator('chromosomes', mode='before')
     @classmethod

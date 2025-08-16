@@ -18,6 +18,7 @@ dependencies = [
     "pooch>=1.8.2",
     "pycomfort>=0.0.18",
     "pydantic>=2.11.7",
+    "python-dotenv>=1.0.0",
     "requests>=2.32.4",
     "rich>=14.1.0",
     "rustworkx>=0.16.0",

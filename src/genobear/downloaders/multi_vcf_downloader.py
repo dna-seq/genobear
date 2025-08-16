@@ -6,7 +6,8 @@ import polars as pl
 import pooch
 from eliot import start_action
 from pydantic import BaseModel, Field, ConfigDict
-
+from collections import defaultdict
+from pycomfort import files
 from genobear.io import vcf_to_parquet
 
 
@@ -58,7 +59,110 @@ class DownloadResult(BaseModel):
         return self.lazy_frame
 
 
-class MultiVCFDownloader(BaseModel):
+class ParquetPostprocessorMixin:
+    """
+    Mixin class providing post-processing utilities for parquet files,
+    particularly for splitting variants and handling VCF-specific data transformations.
+    """
+
+    def split_variants(self, df: pl.LazyFrame, explode_snv_alt: bool = True) -> dict[str, pl.LazyFrame]:
+        """
+        Split variants into separate rows when ALT field contains multiple alleles.
+        
+        Args:
+            df: LazyFrame containing VCF data
+            explode_snv_alt: Whether to explode ALT column on "|" separator for SNV variants
+            
+        Returns:
+            LazyFrame with split variants
+        """
+        import time
+        start_time = time.time()
+        
+        with start_action(action_type="split_variants", explode_snv_alt=explode_snv_alt) as action:
+            tsas = df.select("tsa").unique().collect().to_series().to_list()
+            action.log(message_type="info", tsas=tsas, explode_snv_alt=explode_snv_alt)
+            result = {}
+            for tsa in tsas:
+                df_tsa = df.filter(pl.col("tsa") == tsa)
+                result[tsa] = df_tsa.with_columns(pl.col("alt").str.split("|")).explode("alt") if tsa == "SNV" and explode_snv_alt else df_tsa
+            
+            # Calculate execution time in minutes:seconds format
+            end_time = time.time()
+            elapsed_seconds = end_time - start_time
+            minutes = int(elapsed_seconds // 60)
+            seconds = elapsed_seconds % 60
+            execution_time = f"{minutes}:{seconds:06.3f}"
+            
+            action.log(message_type="info", execution_time=execution_time, tsas=tsas, explode_snv_alt=explode_snv_alt)
+            return result
+        
+    @classmethod
+    def split_variants_from_parquet(cls, parquet: Path, explode_snv_alt: bool = True, write_to: Optional[Path] = None) -> dict[Path, pl.LazyFrame]:
+        """
+        Split variants in a parquet file or LazyFrame.
+        
+        Args:
+            parquet: Path to parquet file or LazyFrame
+            explode_snv_alt: Whether to explode ALT column on "|" separator for SNV variants
+            write_to: Optional directory to write split parquet files to
+            
+        Returns:
+            Dictionary mapping output parquet paths to their corresponding LazyFrames
+        """
+        instance = cls()
+        with start_action(action_type="split_variants_from_parquet", parquet=parquet, explode_snv_alt=explode_snv_alt, write_to=write_to) as action:
+            df = pl.scan_parquet(parquet)
+            stem = parquet.stem
+            folder = write_to if write_to is not None else parquet.parent
+            folder.mkdir(parents=True, exist_ok=True)
+            alts = instance.split_variants(df, explode_snv_alt)
+            result = {}
+            for tsa, df_tsa in alts.items():
+                where = folder / f"{stem}_{tsa}.parquet"
+                action.log(message_type="info", tsa=tsa, where=where)
+                df_tsa.sink_parquet(where)
+                result[where] = df_tsa
+            return result
+        
+    @classmethod
+    def split_and_merge_variants(cls, parquets: List[Path], write_to: Path, explode_snv_alt: bool = True, prefix: str = "variants") -> dict[str, Path]:
+        """
+        Split variants from multiple parquet files and merge them by variant type (TSA).
+        
+        Args:
+            parquets: List of parquet file paths to process
+            write_to: Directory to write merged parquet files to
+            explode_snv_alt: Whether to explode ALT column on "|" separator for SNV variants
+            prefix: Prefix for output filenames
+            
+        Returns:
+            Dictionary mapping variant types (TSA) to their merged parquet file paths
+        """
+        with start_action(action_type="merge_splitted_variants", parquets=parquets, write_to=write_to, explode_snv_alt=explode_snv_alt) as action:
+            assert len(parquets)>=1, "should be one or more parquet files"
+            #note we assume that the first parquet has all the variants
+            instance = cls()
+
+            write_to.mkdir(parents=True, exist_ok=True)
+            result = {}
+            
+            # Group by variant type (TSA) extracted from filename
+            grouped = defaultdict(list)
+            for p in parquets:
+                df = pl.scan_parquet(p)
+                dictionary = instance.split_variants(df, explode_snv_alt)
+                for tsa, lazy_frame in dictionary.items():
+                    grouped[tsa].append(lazy_frame)
+            for tsa, lazy_frames in grouped.items():
+                name = f"{prefix}_{tsa}.parquet"
+                where = write_to / name
+                action.log(f"merging {tsa} from {len(lazy_frames)} parquets to {where}")
+                pl.concat(items=lazy_frames).sink_parquet(where)
+                result[tsa] = where
+            return result
+             
+class MultiVCFDownloader(BaseModel, ParquetPostprocessorMixin):
     model_config = ConfigDict(arbitrary_types_allowed=True)
     """
     Downloads multiple VCF files in parallel using pooch's native capabilities
@@ -80,16 +184,22 @@ class MultiVCFDownloader(BaseModel):
     streaming: bool = Field(default=False, description="Whether to use streaming mode when reading VCF files")
     clean_semicolons: bool = Field(default=False, description="Whether to clean malformed semicolons (;;, ;:, ;;:) before processing VCF files. Files are modified in-place, including decompression/recompression for .gz files.")
     
-    # Output optionsf
+         # Output options
     convert_to_parquet: bool = Field(default=True, description="Convert each VCF to parquet after download")
-    merge_parquets: bool = Field(default=False, description="Merge all parquet files into one")
-    merged_output_path: Optional[Path] = Field(default=None, description="Path for merged parquet file")
+    merged_subpath: Optional[str] = "merged"
     clean_intermediates: bool = Field(default=False, description="Delete downloaded VCF and index files after converting to parquet (saves disk space)")
     
     # State (excluded from serialization)
     registry: Optional[pooch.Pooch] = Field(default=None, exclude=True)
     download_results: Optional[Dict[str, Union[Dict[str, Path], DownloadResult]]] = Field(default=None, exclude=True)
-    
+
+    def merge(self, explode_snv_alt: bool = True) -> dict[str, Path]:
+        parquets = files.with_ext(self.cache_dir, "parquet").to_list()
+        where = self.cache_dir / self.merged_subpath
+        where.mkdir(parents=True, exist_ok=True)            
+        with start_action(action_type=f"detected f{len(parquets)} parquet files in downloaded cache, splitting and merging them", parquets=parquets, explode_snv_alt=explode_snv_alt, prefix=self.cache_subdir, where_to_merge=where) as action:
+            return self.split_and_merge_variants(parquets, where, explode_snv_alt, prefix=self.cache_subdir)
+
     @property
     def lazy_frames(self) -> Dict[str, pl.LazyFrame]:
         """
@@ -131,6 +241,11 @@ class MultiVCFDownloader(BaseModel):
                 paths[identifier] = result.parquet
         
         return paths
+    
+    @property
+    def cache_dir(self) -> Path:
+        """Get the absolute path to the cache directory."""
+        return Path(pooch.os_cache(self.cache_subdir)).resolve()
     
     def model_post_init(self, __context: any) -> None:
         """Initialize the pooch registry with all the files."""
@@ -314,6 +429,62 @@ class MultiVCFDownloader(BaseModel):
             # Merge parquets if requested
             if self.merge_parquets and self.convert_to_parquet:
                 self._merge_parquet_files(results)
+            
+            # Calculate and log final summary
+            end_time = time.time()
+            elapsed_seconds = end_time - start_time
+            minutes = int(elapsed_seconds // 60)
+            seconds = elapsed_seconds % 60
+            execution_time = f"{minutes}:{seconds:06.3f}"
+            
+            # Count results by type
+            vcf_count = sum(1 for r in results.values() if isinstance(r, DownloadResult) and r.has_vcf)
+            parquet_count = sum(1 for r in results.values() if isinstance(r, DownloadResult) and r.has_parquet)
+            index_count = sum(1 for r in results.values() if isinstance(r, DownloadResult) and r.has_index)
+            
+            # Calculate total file sizes if possible
+            total_vcf_size = 0
+            total_parquet_size = 0
+            for result in results.values():
+                if isinstance(result, DownloadResult):
+                    if result.has_vcf and result.vcf.exists():
+                        total_vcf_size += result.vcf.stat().st_size
+                    if result.has_parquet and result.parquet.exists():
+                        total_parquet_size += result.parquet.stat().st_size
+            
+            # Format file sizes in human readable format
+            def format_size(size_bytes):
+                if size_bytes == 0:
+                    return "0 B"
+                for unit in ['B', 'KB', 'MB', 'GB', 'TB']:
+                    if size_bytes < 1024.0:
+                        return f"{size_bytes:.1f} {unit}"
+                    size_bytes /= 1024.0
+                return f"{size_bytes:.1f} PB"
+            
+            action.log(
+                message_type="info",
+                total_execution_time=execution_time,
+                total_identifiers=len(self.vcf_urls),
+                successful_downloads=len(results),
+                skipped_downloads=len(skipped_downloads),
+                vcf_files=vcf_count,
+                parquet_files=parquet_count,
+                index_files=index_count,
+                total_vcf_size=format_size(total_vcf_size),
+                total_parquet_size=format_size(total_parquet_size),
+                cache_directory=str(self.cache_dir),
+                identifiers=list(results.keys()),
+                summary="Multi-VCF download operation completed successfully"
+            )
+            
+            action.add_success_fields(
+                execution_time=execution_time,
+                files_processed=len(results),
+                cache_dir=str(self.cache_dir),
+                vcf_count=vcf_count,
+                parquet_count=parquet_count
+            )
             
             return results
     
@@ -578,3 +749,8 @@ class MultiVCFDownloader(BaseModel):
             lf = pl.concat(lazy_frames, how="vertical_relaxed")
 
         return lf
+    
+    # Alias for convenience
+    def download(self, **kwargs) -> Dict[str, DownloadResult]:
+        """Alias for download_all method."""
+        return self.download_all(**kwargs)

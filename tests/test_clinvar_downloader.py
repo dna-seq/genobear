@@ -15,7 +15,7 @@ import os
 from typing import Generator, Iterator
 from eliot import start_action
 
-from genobear.downloaders.vcf_downloader import ClinVarDownloader, download_clinvar_multiple_assemblies
+from genobear.downloaders.clinvar_downloader import ClinVarDownloader
 from genobear.io import read_vcf_file
 from pycomfort.logging import to_nice_stdout, to_nice_file
 
@@ -74,8 +74,7 @@ class TestClinVarDownloader:
                     cached_clinvar_downloader.vcf_path,
                     info_fields=[],  # Skip INFO fields to avoid long strings
                     streaming=False,  # Disable streaming since it's not implemented in polars-bio
-                    save_parquet=None,  # Don't save to parquet
-                    return_lazy=True
+                    save_parquet=None  # Don't save to parquet
                 )
                 
                 # Take first 10 lines and collect to DataFrame
@@ -119,8 +118,7 @@ class TestClinVarDownloader:
                     cached_clinvar_downloader.vcf_path,
                     info_fields=[],  # Skip problematic INFO fields
                     streaming=False,
-                    save_parquet=None,
-                    return_lazy=True
+                    save_parquet=None
                 ).head(10)  # Limit to first 10 lines
                 
                 # Convert to DataFrame first
