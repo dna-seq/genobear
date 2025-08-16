@@ -1,6 +1,7 @@
 from pathlib import Path
 from typing import Dict, List, Optional, Union, Tuple
 from concurrent.futures import ThreadPoolExecutor, as_completed
+import time
 
 import polars as pl
 import pooch
@@ -65,7 +66,8 @@ class ParquetPostprocessorMixin:
     particularly for splitting variants and handling VCF-specific data transformations.
     """
 
-    def split_variants(self, df: pl.LazyFrame, explode_snv_alt: bool = True) -> dict[str, pl.LazyFrame]:
+    @staticmethod
+    def split_variants(df: pl.LazyFrame, explode_snv_alt: bool = True) -> dict[str, pl.LazyFrame]:
         """
         Split variants into separate rows when ALT field contains multiple alleles.
         
@@ -98,7 +100,7 @@ class ParquetPostprocessorMixin:
             return result
         
     @classmethod
-    def split_variants_from_parquet(cls, parquet: Path, explode_snv_alt: bool = True, write_to: Optional[Path] = None) -> dict[Path, pl.LazyFrame]:
+    def split_variants_from_parquet(cls, parquet: Path, explode_snv_alt: bool = True, write_to: Optional[Path] = None) -> dict[str, Path]:
         """
         Split variants in a parquet file or LazyFrame.
         
@@ -108,65 +110,35 @@ class ParquetPostprocessorMixin:
             write_to: Optional directory to write split parquet files to
             
         Returns:
-            Dictionary mapping output parquet paths to their corresponding LazyFrames
+            Dictionary mapping TSA (variant type) to written parquet file paths
         """
-        instance = cls()
+        # Default output directory next to the input parquet if not provided
+        if write_to is None:
+            write_to = parquet.parent / "splitted_variants"
+        write_to.mkdir(parents=True, exist_ok=True)
         with start_action(action_type="split_variants_from_parquet", parquet=parquet, explode_snv_alt=explode_snv_alt, write_to=write_to) as action:
             df = pl.scan_parquet(parquet)
             stem = parquet.stem
-            folder = write_to if write_to is not None else parquet.parent
+            folder = write_to
             folder.mkdir(parents=True, exist_ok=True)
-            alts = instance.split_variants(df, explode_snv_alt)
-            result = {}
+            alts = cls.split_variants(df, explode_snv_alt)
+            result: dict[str, Path] = {}
             for tsa, df_tsa in alts.items():
-                where = folder / f"{stem}_{tsa}.parquet"
+                tsa_folder = folder / tsa
+                tsa_folder.mkdir(parents=True, exist_ok=True)
+                # Store inside TSA-specific subfolder; filename does not need TSA suffix
+                where = tsa_folder / f"{stem}.parquet"
                 action.log(message_type="info", tsa=tsa, where=where)
                 df_tsa.sink_parquet(where)
-                result[where] = df_tsa
-            return result
-        
-    @classmethod
-    def split_and_merge_variants(cls, parquets: List[Path], write_to: Path, explode_snv_alt: bool = True, prefix: str = "variants") -> dict[str, Path]:
-        """
-        Split variants from multiple parquet files and merge them by variant type (TSA).
-        
-        Args:
-            parquets: List of parquet file paths to process
-            write_to: Directory to write merged parquet files to
-            explode_snv_alt: Whether to explode ALT column on "|" separator for SNV variants
-            prefix: Prefix for output filenames
-            
-        Returns:
-            Dictionary mapping variant types (TSA) to their merged parquet file paths
-        """
-        with start_action(action_type="merge_splitted_variants", parquets=parquets, write_to=write_to, explode_snv_alt=explode_snv_alt) as action:
-            assert len(parquets)>=1, "should be one or more parquet files"
-            #note we assume that the first parquet has all the variants
-            instance = cls()
-
-            write_to.mkdir(parents=True, exist_ok=True)
-            result = {}
-            
-            # Group by variant type (TSA) extracted from filename
-            grouped = defaultdict(list)
-            for p in parquets:
-                df = pl.scan_parquet(p)
-                dictionary = instance.split_variants(df, explode_snv_alt)
-                for tsa, lazy_frame in dictionary.items():
-                    grouped[tsa].append(lazy_frame)
-            for tsa, lazy_frames in grouped.items():
-                name = f"{prefix}_{tsa}.parquet"
-                where = write_to / name
-                action.log(f"merging {tsa} from {len(lazy_frames)} parquets to {where}")
-                pl.concat(items=lazy_frames).sink_parquet(where)
                 result[tsa] = where
             return result
+        
              
 class MultiVCFDownloader(BaseModel, ParquetPostprocessorMixin):
     model_config = ConfigDict(arbitrary_types_allowed=True)
     """
     Downloads multiple VCF files in parallel using pooch's native capabilities
-    and optionally converts/merges them to parquet.
+    and optionally converts/splits them to parquet by variant type.
     
     This is useful for cases where data is split across multiple VCF files
     (e.g., per-chromosome files from Ensembl).
@@ -186,19 +158,20 @@ class MultiVCFDownloader(BaseModel, ParquetPostprocessorMixin):
     
          # Output options
     convert_to_parquet: bool = Field(default=True, description="Convert each VCF to parquet after download")
-    merged_subpath: Optional[str] = "merged"
+    splitted_subpath: Optional[str] = "splitted_variants"
     clean_intermediates: bool = Field(default=False, description="Delete downloaded VCF and index files after converting to parquet (saves disk space)")
     
     # State (excluded from serialization)
     registry: Optional[pooch.Pooch] = Field(default=None, exclude=True)
     download_results: Optional[Dict[str, Union[Dict[str, Path], DownloadResult]]] = Field(default=None, exclude=True)
 
-    def merge(self, explode_snv_alt: bool = True) -> dict[str, Path]:
+    def split_all_variants(self, explode_snv_alt: bool = True) -> dict[str, Path]:
         parquets = files.with_ext(self.cache_dir, "parquet").to_list()
-        where = self.cache_dir / self.merged_subpath
+        where = self.cache_dir / self.splitted_subpath
         where.mkdir(parents=True, exist_ok=True)            
-        with start_action(action_type=f"detected f{len(parquets)} parquet files in downloaded cache, splitting and merging them", parquets=parquets, explode_snv_alt=explode_snv_alt, prefix=self.cache_subdir, where_to_merge=where) as action:
-            return self.split_and_merge_variants(parquets, where, explode_snv_alt, prefix=self.cache_subdir)
+        with start_action(action_type=f"detected {len(parquets)} parquet files in downloaded cache, splitting them", parquets=parquets, explode_snv_alt=explode_snv_alt, prefix=self.cache_subdir) as action:
+            for p in parquets:
+                self.split_variants_from_parquet(p, explode_snv_alt, where)
 
     @property
     def lazy_frames(self) -> Dict[str, pl.LazyFrame]:
@@ -247,6 +220,11 @@ class MultiVCFDownloader(BaseModel, ParquetPostprocessorMixin):
         """Get the absolute path to the cache directory."""
         return Path(pooch.os_cache(self.cache_subdir)).resolve()
     
+    @property
+    def splitted_dir(self) -> Path:
+        """Get the absolute path to the splitted directory."""
+        return self.cache_dir / self.splitted_subpath
+    
     def model_post_init(self, __context: any) -> None:
         """Initialize the pooch registry with all the files."""
         self.registry = pooch.create(
@@ -267,12 +245,11 @@ class MultiVCFDownloader(BaseModel, ParquetPostprocessorMixin):
                 filename = Path(url).name
                 self.registry.registry[filename] = None  # Index files typically don't have hashes
 
-    def _get_expected_parquet_path(self, identifier: str, vcf_filename: str, decompress: bool = True) -> Path:
+    def _get_expected_parquet_path(self, vcf_filename: str, decompress: bool = True) -> Path:
         """
         Get the expected parquet path for a given VCF file.
         
         Args:
-            identifier: The identifier for this file (e.g., 'chr1')
             vcf_filename: The VCF filename
             decompress: Whether VCF files are being decompressed
             
@@ -305,6 +282,8 @@ class MultiVCFDownloader(BaseModel, ParquetPostprocessorMixin):
                 ...
             }
         """
+        start_time = time.time()
+        
         with start_action(
             action_type="multi_vcf_download",
             num_files=len(self.vcf_urls)
@@ -320,7 +299,7 @@ class MultiVCFDownloader(BaseModel, ParquetPostprocessorMixin):
             if self.convert_to_parquet and not force:
                 for identifier, url in self.vcf_urls.items():
                     filename = Path(url).name
-                    expected_parquet = self._get_expected_parquet_path(identifier, filename, decompress)
+                    expected_parquet = self._get_expected_parquet_path(filename, decompress)
                     
                     if expected_parquet.exists():
                         # Parquet exists, skip VCF download
@@ -425,11 +404,7 @@ class MultiVCFDownloader(BaseModel, ParquetPostprocessorMixin):
                 # Clean intermediate files if requested
                 if self.clean_intermediates:
                     self._clean_intermediate_files(results)
-            
-            # Merge parquets if requested
-            if self.merge_parquets and self.convert_to_parquet:
-                self._merge_parquet_files(results)
-            
+          
             # Calculate and log final summary
             end_time = time.time()
             elapsed_seconds = end_time - start_time
@@ -626,51 +601,7 @@ class MultiVCFDownloader(BaseModel, ParquetPostprocessorMixin):
                 cleanup_complete=True
             )
     
-    def _merge_parquet_files(
-        self,
-        results: Dict[str, DownloadResult]
-    ) -> Path:
-        """Merge all parquet files into a single file."""
-        with start_action(action_type="merge_parquet_files") as action:
-            
-            parquet_paths = []
-            for identifier, result in results.items():
-                if result.parquet is not None:
-                    parquet_paths.append(result.parquet)
-            
-            if not parquet_paths:
-                raise ValueError("No parquet files to merge")
-            
-            action.log(
-                message_type="info",
-                num_files=len(parquet_paths),
-                files=[str(p) for p in parquet_paths]
-            )
-            
-            # Read all parquet files lazily and concatenate
-            lazy_frames = [pl.scan_parquet(path) for path in parquet_paths]
-            merged_lf = pl.concat(lazy_frames, how="vertical_relaxed")
-            
-            # Determine output path
-            if self.merged_output_path:
-                output_path = self.merged_output_path
-            else:
-                # Default to cache directory
-                output_path = Path(self.registry.path) / "merged.parquet"
-            
-            # Write the merged data
-            merged_lf.collect().write_parquet(output_path)
-            
-            action.log(
-                message_type="info",
-                merged_path=str(output_path)
-            )
-            
-            # Store the merged path in results
-            if self.download_results:
-                self.download_results["_merged"] = DownloadResult(parquet=output_path)
-            
-            return output_path
+    
     
     @classmethod
     def from_url_list(
@@ -706,49 +637,18 @@ class MultiVCFDownloader(BaseModel, ParquetPostprocessorMixin):
             **kwargs
         )
     
-    def read_merged_parquet(self) -> pl.LazyFrame:
-        """
-        Read all downloaded and converted parquet files as a single LazyFrame/DataFrame.
+    def read_splited(self, tsa: str, split_if_needed: bool = True) -> pl.LazyFrame:
+        tsa_folder = self.splitted_dir / tsa
+        if split_if_needed:
+            # Trigger splitting if the folder does not exist or appears empty
+            if (not tsa_folder.exists()) or (not any(tsa_folder.glob("*.parquet"))):
+                self.split_all_variants()
+        # Read all parquet files for the TSA
+        return pl.scan_parquet(str(tsa_folder / "*.parquet"))
         
-        Args:
-            return_lazy: If True, return a LazyFrame. If False, collect and return DataFrame.
-            
-        Returns:
-            LazyFrame combining data from all parquet files
-        """
-        if self.download_results is None:
-            raise ValueError("No files downloaded yet. Call download_all() first.")
-        
-        # Check if we already have a merged file
-        if "_merged" in self.download_results:
-            merged_result = self.download_results["_merged"]
-            if isinstance(merged_result, DownloadResult) and merged_result.parquet is not None:
-                lf = pl.scan_parquet(merged_result.parquet)
-            else:
-                # Handle legacy dict format for backward compatibility
-                if isinstance(merged_result, dict) and "parquet" in merged_result:
-                    lf = pl.scan_parquet(merged_result["parquet"])
-                else:
-                    raise ValueError("Merged result found but no parquet file available")
-        else:
-            # Collect all parquet paths
-            parquet_paths = []
-            for identifier, result in self.download_results.items():
-                if identifier != "_merged":
-                    if isinstance(result, DownloadResult) and result.parquet is not None:
-                        parquet_paths.append(result.parquet)
-                    # Handle legacy dict format for backward compatibility
-                    elif isinstance(result, dict) and "parquet" in result:
-                        parquet_paths.append(result["parquet"])
-            
-            if not parquet_paths:
-                raise ValueError("No parquet files available. Ensure convert_to_parquet=True was used.")
-            
-            # Read and concatenate all parquet files
-            lazy_frames = [pl.scan_parquet(path) for path in parquet_paths]
-            lf = pl.concat(lazy_frames, how="vertical_relaxed")
 
-        return lf
+    def read_snvs(self, split_if_needed: bool = True) -> pl.LazyFrame:
+        return self.read_splited("SNV", split_if_needed)
     
     # Alias for convenience
     def download(self, **kwargs) -> Dict[str, DownloadResult]:

@@ -43,10 +43,15 @@ def ensembl(
         "--chromosomes", "-c",
         help="Specific chromosomes to download (e.g., 1,2,X). If not specified, downloads all available chromosomes"
     ),
-    upload: bool = typer.Option(
-        True,
-        "--upload/--no-upload", "-u",
-        help="Upload downloaded VCF files to HuggingFace dataset. Use --no-upload to disable."
+    upload_chromosomes: bool = typer.Option(
+        False,
+        "--upload-chromosomes/--no-upload-chromosomes",
+        help="Upload individual chromosome parquet files to HuggingFace dataset."
+    ),
+    upload_splitted: bool = typer.Option(
+        False,
+        "--upload-splitted/--no-upload-splitted",
+        help="Upload splitted variant type files to HuggingFace dataset. Requires --split to be enabled."
     ),
     hf_token: Optional[str] = typer.Option(
         None,
@@ -72,13 +77,20 @@ def ensembl(
         True,
         "--checksums/--no-checksums",
         help="Validate downloaded files using checksums from Ensembl"
+    ),
+    split: bool = typer.Option(
+        False,
+        "--split/--no-split",
+        help="Split downloaded parquet files by variant type and upload the splitted folder"
     )
 ):
     """
     Download Ensembl variation VCF files for human genome.
     
     Downloads VCF files from https://ftp.ensembl.org/pub/current_variation/vcf/homo_sapiens/
-    and optionally uploads them to the HuggingFace dataset.
+    and optionally uploads them to HuggingFace dataset. You can upload individual chromosome 
+    files using --upload-chromosomes and/or splitted variant type files using --upload-splitted 
+    (requires --split to be enabled).
     """
     # Configure logging for this command
     to_nice_file(logs / "download.json", logs / "download.log")
@@ -89,9 +101,11 @@ def ensembl(
             message_type="info",
             cache_subdir=cache_subdir if cache_subdir else "default",
             chromosomes=chromosomes,
-            upload=upload,
-            hf_repo=hf_repo if upload else None,
-            force_download=force_download
+            upload_chromosomes=upload_chromosomes,
+            upload_splitted=upload_splitted,
+            hf_repo=hf_repo if (upload_chromosomes or upload_splitted) else None,
+            force_download=force_download,
+            split=split
         )
         
         # Create downloader with custom cache_subdir if specified
@@ -133,14 +147,50 @@ def ensembl(
         
         console.print(f"✅ Successfully downloaded {len(downloaded_files)} VCF files")
         
-                # Upload to HuggingFace if requested
-        if upload:
+        # Split files if requested
+        splitted_files = None
+        if split:
+            console.print("🔄 Splitting parquet files by variant type...")
+            with Progress(
+                SpinnerColumn(),
+                TextColumn("[progress.description]{task.description}"),
+                console=console,
+                transient=True
+            ) as progress:
+                split_task = progress.add_task("Splitting files...", total=None)
+                
+                splitted_files = downloader.split_all_variants(explode_snv_alt=True)
+                
+                progress.update(split_task, description="✅ Split completed")
+            
+            console.print(f"✅ Successfully split files into variant type directories")
+            console.print(f"  📁 Split directory: {downloader.splitted_dir}")
+        
+        # Upload to HuggingFace if requested
+        if upload_chromosomes or upload_splitted:
             uploader = HuggingFaceUploader(
                 hf_repo=hf_repo,
                 hf_token=hf_token,
                 console=console
             )
-            uploader.upload_to_huggingface(downloaded_files)
+            
+            # Upload splitted files if requested and available
+            if upload_splitted:
+                if split and downloader.splitted_dir.exists():
+                    # Upload splitted folder using upload_folder
+                    splitted_folder = downloader.splitted_dir
+                    uploader.upload_folder(
+                        folder_path=splitted_folder,
+                        path_in_repo="splitted_variants",
+                        allow_patterns=["*.parquet"],
+                        commit_message=f"Upload splitted Ensembl variants by type"
+                    )
+                else:
+                    console.print("⚠️ Cannot upload splitted files: either --split was not enabled or no splitted files were created", style="yellow")
+            
+            # Upload individual chromosome files if requested
+            if upload_chromosomes:
+                uploader.upload_to_huggingface(downloaded_files)
         
         action.log(message_type="success", files_downloaded=len(downloaded_files))
 
