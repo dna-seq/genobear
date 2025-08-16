@@ -1,4 +1,0 @@
-*.vcf filter=lfs diff=lfs merge=lfs -text
-*.parquet filter=lfs diff=lfs merge=lfs -text
-*.vcf !text !filter !merge !diff
-*.parquet !text !filter !merge !diff
