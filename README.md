@@ -9,7 +9,7 @@ A unified toolkit for downloading, converting, and annotating genomic databases.
 - **Annotate VCF files**: Add variant annotations from multiple databases
 - **CLI and Python API**: Use via command line or import as a Python library
 - **Unified configuration**: Consistent database paths and discovery
-- **Streaming processing**: Handle large files efficiently with biobear
+- **Streaming processing**: Handle large files efficiently with polars-bio
 
 ## Installation
 

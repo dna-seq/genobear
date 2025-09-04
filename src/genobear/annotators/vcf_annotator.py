@@ -23,13 +23,13 @@ class VCFAnnotator(Annotator[Path, pl.LazyFrame]):
         
         Args:
             name: Unique name for this annotator instance
-            info_fields: INFO fields to read from VCF. Defaults to empty list for faster reading
+            info_fields: INFO fields to read from VCF. If None, reads all available fields
             streaming: Whether to use streaming mode. Defaults to True (same as read_vcf_file)
             save_parquet: Controls parquet saving. Defaults to "auto" (saves next to VCF)
             *dependencies: Optional dependencies that produce Path outputs
         """
         super().__init__(name, *dependencies)
-        self.info_fields = info_fields if info_fields is not None else []
+        self.info_fields = info_fields
         self.streaming = streaming
         self.save_parquet = save_parquet
 
@@ -65,11 +65,3 @@ class VCFAnnotator(Annotator[Path, pl.LazyFrame]):
             action.log(message_type="info", vcf_read_complete=True, 
                       result_type=type(result).__name__)
             return result
-
-
-if __name__ == "__main__":
-    import biobear as bb
-    from biobear.reader import Reader
-    sessions = bb.new_session()
-    sessions.read_vcf_file("/home/antonkulaga/.cache/ensembl_variation/homo_sapiens-chr21.vcf")
-    #chr21.head()

@@ -1,6 +1,6 @@
 [project]
 name = "genobear"
-version = "0.1.0"
+version = "0.1.1"
 description = "Genomic Database Management and Annotation Tool"
 readme = "README.md"
 authors = [
@@ -8,13 +8,12 @@ authors = [
 ]
 requires-python = ">=3.10"
 dependencies = [
-    #"altair>=5.5.0",
-    "biobear>=0.23.7",
+    "aiohttp>=3.12.15",
     "eliot>=1.17.0",
-    "flashtext2>=1.1.0",
+    "fsspec>=2025.9.0",
     "huggingface-hub>=0.34.4",
-    "polars>=1.17.1",
-    "polars-bio>=0.10.3",
+    "pipefunc[all]>=0.85.2",
+    "polars-bio>=0.13.1",
     "pooch>=1.8.2",
     "pycomfort>=0.0.18",
     "pydantic>=2.11.7",
@@ -22,7 +21,7 @@ dependencies = [
     "requests>=2.32.4",
     "rich>=14.1.0",
     "rustworkx>=0.16.0",
-    "typer>=0.16.0",
+    "typer>=0.17.3",
 ]
 
 [project.scripts]

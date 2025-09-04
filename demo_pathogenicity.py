@@ -6,13 +6,11 @@ This addresses the user's frustration about missing pathogenicity validation by 
 exactly what clinical significance information is now captured and reported.
 """
 
-import asyncio
 from pathlib import Path
 import polars as pl
 from eliot import start_action
 
 import genobear as gb
-from genobear.old_annotation.annotate import extract_pathogenicity_stats, report_pathogenicity_summary
 
 
 def demo_pathogenicity_analysis():

@@ -1,9 +1,8 @@
 from __future__ import annotations
 
+import os
 from pathlib import Path
 from typing import Optional, List
-import sys
-import os
 
 import typer
 from rich.console import Console
@@ -33,10 +32,15 @@ console = Console()
 
 @app.command()
 def ensembl(
-    cache_subdir: Optional[str] = typer.Option(
+    base: Optional[str] = typer.Option(
         None,
-        "--cache-subdir",
-        help="Cache subdirectory to save downloaded VCF files. If not specified, uses the default 'ensembl_variations'."
+        "--base",
+        help="Base directory for cache. Uses GENOBEAR_FOLDER environment variable if not specified, defaults to 'genobear' if env var not set."
+    ),
+    subdir_name: Optional[str] = typer.Option(
+        "ensembl_variations",
+        "--subdir-name",
+        help="Subdirectory name within base for Ensembl data."
     ),
     chromosomes: Optional[List[str]] = typer.Option(
         None,
@@ -99,7 +103,8 @@ def ensembl(
     with start_action(action_type="download_ensembl_command") as action:
         action.log(
             message_type="info",
-            cache_subdir=cache_subdir if cache_subdir else "default",
+            base=base if base else os.getenv("GENOBEAR_FOLDER", "genobear"),
+            subdir_name=subdir_name,
             chromosomes=chromosomes,
             upload_chromosomes=upload_chromosomes,
             upload_splitted=upload_splitted,
@@ -108,28 +113,29 @@ def ensembl(
             split=split
         )
         
-        # Create downloader with custom cache_subdir if specified
+        # Create downloader with custom base/subdir_name if specified
         console.print("🔧 Setting up Ensembl downloader...")
         
         downloader_kwargs = {
             "chromosomes": set(chromosomes) if chromosomes else None,
             "clean_semicolons": clean_semicolons,
             "use_checksums": use_checksums,
-            "force_download": force_download
+            "force_download": force_download,
+            "subdir_name": subdir_name
         }
         
-        if cache_subdir is not None:
-            downloader_kwargs["cache_subdir"] = cache_subdir
+        # Only pass base if explicitly provided, otherwise use the environment variable default
+        if base is not None:
+            downloader_kwargs["base"] = base
         
         downloader = EnsemblDownloader(**downloader_kwargs)
         
         # Get the actual cache directory that will be used
         output_dir = downloader.cache_dir
-        if cache_subdir is not None:
-            console.print(f"📁 Using custom cache subdirectory: [bold blue]{cache_subdir}[/bold blue]")
-        else:
-            console.print(f"📁 Using default cache subdirectory: [bold blue]ensembl_variations[/bold blue]")
-        console.print(f"📁 Cache directory: [bold blue]{output_dir}[/bold blue]")
+        effective_base = base if base else os.getenv("GENOBEAR_FOLDER", "genobear")
+        console.print(f"📁 Base directory: [bold blue]{effective_base}[/bold blue]")
+        console.print(f"📁 Subdirectory: [bold blue]{subdir_name}[/bold blue]")
+        console.print(f"📁 Full cache path: [bold blue]{output_dir}[/bold blue]")
         
         # Download files
         console.print("📥 Starting download...")

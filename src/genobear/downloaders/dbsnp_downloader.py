@@ -9,10 +9,10 @@ from eliot import start_action
 import typer
 from pydantic import HttpUrl, model_validator
 
-from genobear.downloaders.vcf_downloader import VCFDownloader
+from genobear.downloaders.multi_vcf_downloader import MultiVCFDownloader
 
 
-class DbSNPDownloader(VCFDownloader):
+class DbSNPDownloader(MultiVCFDownloader):
     """
     Downloader for dbSNP VCF files from the NCBI latest release directory.
 

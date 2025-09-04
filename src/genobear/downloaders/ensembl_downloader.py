@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 import re
 from pathlib import Path
 from typing import Dict, List, Optional, Set, Union
@@ -33,7 +34,8 @@ class EnsemblDownloader(MultiVCFDownloader):
     vcf_urls: Dict[str, str] = Field(default_factory=dict, description="Mapping of identifier (e.g. chr1) to VCF URL")
     index_urls: Optional[Dict[str, str]] = Field(default_factory=dict, description="Optional mapping of identifier to index URLs")
     known_hashes: Optional[Dict[str, str]] = Field(default=None, description="Optional mapping of identifier to known hashes")
-    cache_subdir: str = Field(default="ensembl_variations", description="Cache subdirectory for Ensembl variation data")
+    base: str | Path = Field(default_factory=lambda: os.getenv("GENOBEAR_FOLDER", "genobear"))
+    subdir_name: str = Field(default="ensembl_variations", description="Cache subdirectory for Ensembl variation data")
     split_variant_files: bool = Field(default=False, description="Whether to split variants into multiple files, for example when we have A|G or similar")
     
     # Chromosome selection  
@@ -225,6 +227,8 @@ class EnsemblDownloader(MultiVCFDownloader):
         chromosomes: List[str],
         use_checksums: bool = True,
         clean_semicolons: bool = True,
+        base: str | Path = None,
+        subdir_name: str = "ensembl_variations",
         **kwargs
     ) -> "EnsemblDownloader":
         """
@@ -234,44 +238,81 @@ class EnsemblDownloader(MultiVCFDownloader):
             chromosomes: List of chromosome identifiers (e.g., ['1', '2', 'X'])
             use_checksums: Whether to fetch and validate checksums
             clean_semicolons: Whether to clean malformed semicolons before processing
+            base: Base directory for cache (uses GENOBEAR_FOLDER env var if None)
+            subdir_name: Subdirectory name within base for Ensembl data
             **kwargs: Additional arguments passed to the constructor
             
         Returns:
             Configured EnsemblDownloader instance
         """
-        return cls(
-            chromosomes=chromosomes,
-            use_checksums=use_checksums,
-            clean_semicolons=clean_semicolons,
+        kwargs_dict = {
+            "chromosomes": chromosomes,
+            "use_checksums": use_checksums,
+            "clean_semicolons": clean_semicolons,
+            "subdir_name": subdir_name,
             **kwargs
-        )
+        }
+        
+        # Only pass base if it's explicitly provided, otherwise use the default
+        if base is not None:
+            kwargs_dict["base"] = base
+            
+        return cls(**kwargs_dict)
     
     @classmethod
-    def for_autosomes_only(cls, clean_semicolons: bool = True, **kwargs) -> "EnsemblDownloader":
+    def for_autosomes_only(
+        cls, 
+        clean_semicolons: bool = True, 
+        base: str | Path = None,
+        subdir_name: str = "ensembl_variations",
+        **kwargs
+    ) -> "EnsemblDownloader":
         """
         Convenience method to create a downloader for autosomal chromosomes only.
         
         Args:
             clean_semicolons: Whether to clean malformed semicolons before processing
+            base: Base directory for cache (uses GENOBEAR_FOLDER env var if None)
+            subdir_name: Subdirectory name within base for Ensembl data
             **kwargs: Additional arguments passed to the constructor
             
         Returns:
             EnsemblDownloader configured for chromosomes 1-22
         """
         autosomes = [str(i) for i in range(1, 23)]
-        return cls.for_chromosomes(autosomes, clean_semicolons=clean_semicolons, **kwargs)
+        return cls.for_chromosomes(
+            autosomes, 
+            clean_semicolons=clean_semicolons, 
+            base=base,
+            subdir_name=subdir_name,
+            **kwargs
+        )
     
     @classmethod
-    def for_sex_chromosomes_only(cls, clean_semicolons: bool = True, **kwargs) -> "EnsemblDownloader":
+    def for_sex_chromosomes_only(
+        cls, 
+        clean_semicolons: bool = True, 
+        base: str | Path = None,
+        subdir_name: str = "ensembl_variations",
+        **kwargs
+    ) -> "EnsemblDownloader":
         """
         Convenience method to create a downloader for sex chromosomes only.
         
         Args:
             clean_semicolons: Whether to clean malformed semicolons before processing
+            base: Base directory for cache (uses GENOBEAR_FOLDER env var if None)
+            subdir_name: Subdirectory name within base for Ensembl data
             **kwargs: Additional arguments passed to the constructor
             
         Returns:
             EnsemblDownloader configured for chromosomes X and Y
         """
         sex_chromosomes = ['X', 'Y']
-        return cls.for_chromosomes(sex_chromosomes, clean_semicolons=clean_semicolons, **kwargs)
+        return cls.for_chromosomes(
+            sex_chromosomes, 
+            clean_semicolons=clean_semicolons, 
+            base=base,
+            subdir_name=subdir_name,
+            **kwargs
+        )

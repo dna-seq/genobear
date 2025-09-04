@@ -2,14 +2,13 @@ from pathlib import Path
 from typing import Dict, List, Optional, Union, Tuple
 from concurrent.futures import ThreadPoolExecutor, as_completed
 import time
+import os
 
 import polars as pl
 import pooch
 from eliot import start_action
 from pydantic import BaseModel, Field, ConfigDict
-from collections import defaultdict
-from pycomfort import files
-from genobear.io import vcf_to_parquet
+from genobear.io import vcf_to_parquet, resolve_genobear_subfolder
 
 
 class DownloadResult(BaseModel):
@@ -149,14 +148,13 @@ class MultiVCFDownloader(BaseModel, ParquetPostprocessorMixin):
     index_urls: Optional[Dict[str, str]] = Field(default=None, description="Optional mapping of identifier to index URLs")
     known_hashes: Optional[Dict[str, str]] = Field(default=None, description="Optional mapping of identifier to known hashes")
     
-    cache_subdir: str = "multi_vcf_downloader"
+    base: str | Path = Field(default_factory=lambda: os.getenv("GENOBEAR_FOLDER", "genobear"))
+    subdir_name: str = "multi_vcf_downloader"
     parallel: bool = Field(default=True, description="Download files concurrently using a thread pool")
     max_workers: int = Field(default=8, description="Maximum number of concurrent download threads")
     progressbar: bool = Field(default=True, description="Show per-file progress bars during downloads (may interleave when parallel)")
-    streaming: bool = Field(default=False, description="Whether to use streaming mode when reading VCF files")
-    clean_semicolons: bool = Field(default=False, description="Whether to clean malformed semicolons (;;, ;:, ;;:) before processing VCF files. Files are modified in-place, including decompression/recompression for .gz files.")
     
-         # Output options
+    # Output options
     convert_to_parquet: bool = Field(default=True, description="Convert each VCF to parquet after download")
     splitted_subpath: Optional[str] = "splitted_variants"
     clean_intermediates: bool = Field(default=False, description="Delete downloaded VCF and index files after converting to parquet (saves disk space)")
@@ -166,10 +164,10 @@ class MultiVCFDownloader(BaseModel, ParquetPostprocessorMixin):
     download_results: Optional[Dict[str, Union[Dict[str, Path], DownloadResult]]] = Field(default=None, exclude=True)
 
     def split_all_variants(self, explode_snv_alt: bool = True) -> dict[str, Path]:
-        parquets = files.with_ext(self.cache_dir, "parquet").to_list()
+        parquets = [p for p in self.cache_dir.glob("**/*.parquet") if p.parent.name == self.splitted_subpath]
         where = self.cache_dir / self.splitted_subpath
         where.mkdir(parents=True, exist_ok=True)            
-        with start_action(action_type=f"detected {len(parquets)} parquet files in downloaded cache, splitting them", parquets=parquets, explode_snv_alt=explode_snv_alt, prefix=self.cache_subdir) as action:
+        with start_action(action_type=f"detected {len(parquets)} parquet files in downloaded cache, splitting them", parquets=parquets, explode_snv_alt=explode_snv_alt, prefix=self.subdir_name) as action:
             for p in parquets:
                 self.split_variants_from_parquet(p, explode_snv_alt, where)
 
@@ -218,7 +216,7 @@ class MultiVCFDownloader(BaseModel, ParquetPostprocessorMixin):
     @property
     def cache_dir(self) -> Path:
         """Get the absolute path to the cache directory."""
-        return Path(pooch.os_cache(self.cache_subdir)).resolve()
+        return resolve_genobear_subfolder(self.subdir_name, self.base)
     
     @property
     def splitted_dir(self) -> Path:
@@ -228,7 +226,7 @@ class MultiVCFDownloader(BaseModel, ParquetPostprocessorMixin):
     def model_post_init(self, __context: any) -> None:
         """Initialize the pooch registry with all the files."""
         self.registry = pooch.create(
-            path=pooch.os_cache(self.cache_subdir),
+            path=self.cache_dir,
             base_url="",  # We'll use full URLs
             registry={}
         )
@@ -245,29 +243,33 @@ class MultiVCFDownloader(BaseModel, ParquetPostprocessorMixin):
                 filename = Path(url).name
                 self.registry.registry[filename] = None  # Index files typically don't have hashes
 
-    def _get_expected_parquet_path(self, vcf_filename: str, decompress: bool = True) -> Path:
+    def _get_expected_parquet_path(self, vcf_filename: str) -> Path:
         """
         Get the expected parquet path for a given VCF file.
         
         Args:
             vcf_filename: The VCF filename
-            decompress: Whether VCF files are being decompressed
             
         Returns:
             Expected path where parquet file would be saved
         """
-        # Determine the VCF path after download/decompression
+        # Determine the VCF path after download
         vcf_path = Path(self.registry.path) / vcf_filename
-        if vcf_filename.endswith('.gz') and decompress:
-            # If we're decompressing, the actual VCF name won't have .gz
-            vcf_path = Path(self.registry.path) / vcf_filename[:-3]
         
-        # Convert to parquet path (same logic as in io.py)
-        return vcf_path.with_suffix('.parquet')
+        # Convert to parquet path using the same logic as _default_parquet_path in io.py
+        # Remove .vcf or .vcf.gz extension before adding .parquet
+        if vcf_path.suffixes == ['.vcf', '.gz']:
+            # Handle .vcf.gz files
+            return vcf_path.with_suffix('').with_suffix('.parquet')
+        elif vcf_path.suffix == '.vcf':
+            # Handle .vcf files
+            return vcf_path.with_suffix('.parquet')
+        else:
+            # Fallback for other file types
+            return vcf_path.with_suffix('.parquet')
     
     def download_all(
         self,
-        decompress: bool = True,
         download_index: bool = True,
         force: bool = False
     ) -> Dict[str, DownloadResult]:
@@ -299,7 +301,7 @@ class MultiVCFDownloader(BaseModel, ParquetPostprocessorMixin):
             if self.convert_to_parquet and not force:
                 for identifier, url in self.vcf_urls.items():
                     filename = Path(url).name
-                    expected_parquet = self._get_expected_parquet_path(filename, decompress)
+                    expected_parquet = self._get_expected_parquet_path(filename)
                     
                     if expected_parquet.exists():
                         # Parquet exists, skip VCF download
@@ -324,8 +326,7 @@ class MultiVCFDownloader(BaseModel, ParquetPostprocessorMixin):
                     continue
                     
                 filename = Path(url).name
-                processor = pooch.Decompress(name=filename.replace('.gz', '')) if decompress and filename.endswith('.gz') else None
-                files_to_download.append((identifier, url, filename, 'vcf', processor))
+                files_to_download.append((identifier, url, filename, 'vcf', None))
             
             # Add index files if requested (only for non-skipped files)
             if download_index and self.index_urls:
@@ -497,9 +498,7 @@ class MultiVCFDownloader(BaseModel, ParquetPostprocessorMixin):
         """
         # Use the dedicated vcf_to_parquet function
         lazy_frame, parquet_path = vcf_to_parquet(
-            vcf_path,
-            streaming=self.streaming,
-            clean_semicolons=self.clean_semicolons
+            vcf_path
         )
         
         return parquet_path, lazy_frame
@@ -607,7 +606,8 @@ class MultiVCFDownloader(BaseModel, ParquetPostprocessorMixin):
     def from_url_list(
         cls,
         urls: List[str],
-        cache_subdir: str = "multi_vcf_downloader",
+        base: str | Path = None,
+        subdir_name: str = "multi_vcf_downloader",
         **kwargs
     ) -> "MultiVCFDownloader":
         """
@@ -630,12 +630,18 @@ class MultiVCFDownloader(BaseModel, ParquetPostprocessorMixin):
             if url.endswith('.vcf.gz') or url.endswith('.vcf'):
                 index_urls[identifier] = f"{url}.tbi"
         
-        return cls(
-            vcf_urls=vcf_urls, 
-            index_urls=index_urls if index_urls else None,
-            cache_subdir=cache_subdir, 
+        kwargs_dict = {
+            "vcf_urls": vcf_urls, 
+            "index_urls": index_urls if index_urls else None,
+            "subdir_name": subdir_name,
             **kwargs
-        )
+        }
+        
+        # Only pass base if it's explicitly provided, otherwise use the default
+        if base is not None:
+            kwargs_dict["base"] = base
+            
+        return cls(**kwargs_dict)
     
     def read_splited(self, tsa: str, split_if_needed: bool = True) -> pl.LazyFrame:
         tsa_folder = self.splitted_dir / tsa
