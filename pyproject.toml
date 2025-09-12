@@ -21,6 +21,7 @@ dependencies = [
     "requests>=2.32.4",
     "rich>=14.1.0",
     "rustworkx>=0.16.0",
+    "tenacity>=9.0.0",
     "typer>=0.17.3",
 ]
 

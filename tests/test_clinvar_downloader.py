@@ -39,6 +39,22 @@ class TestClinVarDownloader:
         
         # Log files will remain for inspection
 
+    @pytest.fixture(scope="session")
+    def cache_directory(self, request) -> Path:
+        """Get the cache directory and optionally clean it."""
+        cache_dir = Path.home() / ".cache" / "genobear_test" / "clinvar_cache"
+        
+        # Check if cache cleaning is requested
+        if request.config.getoption("--clean-cache"):
+            if cache_dir.exists():
+                print(f"\n🧹 Cleaning cache directory: {cache_dir}")
+                shutil.rmtree(cache_dir, ignore_errors=True)
+                print("✅ Cache cleaned successfully")
+            else:
+                print(f"\n💡 Cache directory doesn't exist, nothing to clean: {cache_dir}")
+        
+        return cache_dir
+
     @pytest.fixture
     def temp_cache_dir(self) -> Generator[Path, None, None]:
         """Create a temporary directory for testing."""
@@ -48,13 +64,11 @@ class TestClinVarDownloader:
         shutil.rmtree(temp_dir, ignore_errors=True)
 
     @pytest.fixture(scope="session")
-    def cached_clinvar_downloader(self) -> ClinVarDownloader:
+    def cached_clinvar_downloader(self, cache_directory: Path) -> ClinVarDownloader:
         """Create a session-scoped ClinVarDownloader that reuses downloads across tests."""
-        # Use a persistent cache directory that won't be cleaned up
-        cache_dir = Path.home() / ".cache" / "genobear_test" / "clinvar_cache"
         downloader = ClinVarDownloader(
             assembly='GRCh38',
-            subdir_name=str(cache_dir)
+            subdir_name=str(cache_directory)
         )
         # Pre-download the files once for the session
         downloader.download_all()

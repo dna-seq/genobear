@@ -26,6 +26,12 @@ def pytest_addoption(parser):
             "Defaults to False (shared pooch cache is reused)."
         ),
     )
+    parser.addoption(
+        "--clean-cache",
+        action="store_true",
+        default=False,
+        help="Clean the cache directory before running tests"
+    )
 
 
 @pytest.fixture(scope="session")

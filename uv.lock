@@ -1399,6 +1399,7 @@ dependencies = [
     { name = "requests" },
     { name = "rich" },
     { name = "rustworkx" },
+    { name = "tenacity" },
     { name = "typer" },
 ]
 
@@ -1430,6 +1431,7 @@ requires-dist = [
     { name = "requests", specifier = ">=2.32.4" },
     { name = "rich", specifier = ">=14.1.0" },
     { name = "rustworkx", specifier = ">=0.16.0" },
+    { name = "tenacity", specifier = ">=9.0.0" },
     { name = "typer", specifier = ">=0.17.3" },
 ]
 
