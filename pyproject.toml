@@ -12,22 +12,22 @@ dependencies = [
     "eliot>=1.17.0",
     "fsspec>=2025.9.0",
     "huggingface-hub>=0.34.4",
-    "pipefunc[all]>=0.85.2",
-    "polars-bio>=0.13.1",
+    "pipefunc[all]>=0.86.0",
+    "polars-bio>=0.17.2",
     "pooch>=1.8.2",
     "pycomfort>=0.0.18",
     "pydantic>=2.11.7",
     "python-dotenv>=1.0.0",
     "requests>=2.32.4",
     "rich>=14.1.0",
-    "rustworkx>=0.16.0",
-    "tenacity>=9.0.0",
-    "typer>=0.17.3",
+    "tenacity>=9.1.2",
+    "typer>=0.19.2",
 ]
 
 [project.scripts]
-genobear = "genobear:app"
+#genobear = "genobear:app"
 download = "genobear.download:app"
+prepare = "genobear.prepare:app"
 annotate = "genobear.annotate:app"
 
 [build-system]

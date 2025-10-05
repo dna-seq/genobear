@@ -130,14 +130,6 @@ def get_info_fields(vcf_path: str) -> list[str]:
 def read_vcf_file(
     file_path: Union[str, Path],
     info_fields: Union[list[str], None] = None,
-    thread_num: int = 1,
-    chunk_size: int = 8,
-    concurrent_fetches: int = 1,
-    allow_anonymous: bool = True,
-    enable_request_payer: bool = False,
-    max_retries: int = 5,
-    timeout: int = 300,
-    compression_type: str = "auto",
     save_parquet: SaveParquet = "auto"
 ) -> pl.LazyFrame:
     """
@@ -213,9 +205,10 @@ def read_vcf_file(
                 parquet_path=str(parquet_path)
             ) as save_action:
                 if isinstance(result, pl.LazyFrame):
-                    # Force collection to avoid streaming issues
-                    result.collect(streaming=False).write_parquet(str(parquet_path))
+                    # Stream directly to parquet without collecting into memory
+                    result.sink_parquet(str(parquet_path))
                 else:
+                    # DataFrame path (rare here) – write directly
                     result.write_parquet(str(parquet_path))
                 
                 save_action.log(
@@ -235,14 +228,6 @@ def vcf_to_parquet(
     vcf_path: Union[str, Path],
     parquet_path: Optional[Union[str, Path]] = None,
     info_fields: Union[list[str], None] = None,
-    thread_num: int = 1,
-    chunk_size: int = 8,
-    concurrent_fetches: int = 1,
-    allow_anonymous: bool = True,
-    enable_request_payer: bool = False,
-    max_retries: int = 5,
-    timeout: int = 300,
-    compression_type: str = "auto",
     overwrite: bool = False
 ) -> AnnotatedLazyFrame:
     """
@@ -318,14 +303,6 @@ def vcf_to_parquet(
         lazy_frame = read_vcf_file(
             file_path=vcf_path,
             info_fields=info_fields,
-            thread_num=thread_num,
-            chunk_size=chunk_size,
-            concurrent_fetches=concurrent_fetches,
-            allow_anonymous=allow_anonymous,
-            enable_request_payer=enable_request_payer,
-            max_retries=max_retries,
-            timeout=timeout,
-            compression_type=compression_type,
             save_parquet=output_path
         )
         

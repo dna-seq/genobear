@@ -5,6 +5,7 @@ from typing import Dict, Optional
 import polars as pl
 from eliot import start_action
 from pipefunc import pipefunc, Pipeline
+from pipefunc.typing import Array
 from genobear.config import get_default_workers
 
 
@@ -43,7 +44,7 @@ def split_variants_by_tsa(
         stem = parquet_path.stem
         
         # Get unique TSAs (variant types)
-        tsas = df.select("tsa").unique().collect().to_series().to_list()
+        tsas = df.select("tsa").unique().collect(streaming=True).to_series().to_list()
         action.log(message_type="info", tsas=tsas, explode_snv_alt=explode_snv_alt)
         
         result: Dict[str, Path] = {}
@@ -79,19 +80,68 @@ def split_variants_by_tsa(
 
 def make_parquet_splitting_pipeline() -> Pipeline:
     """Create a pipeline that only does splitting with parquet files as input."""
-    return Pipeline([split_variants_by_tsa], print_error=True)
+    return Pipeline([split_variants_by_tsa, validate_split_outputs], print_error=True)
 
 
-def make_vcf_splitting_pipeline() -> Pipeline:
-    """Create a pipeline that combines VCF download/conversion with splitting using pipeline composition."""
-    from genobear.pipelines.vcf_downloader import make_vcf_pipeline
-    
-    # Compose the VCF download pipeline with the splitting pipeline
-    vcf_pipeline = make_vcf_pipeline()
-    splitting_pipeline = make_parquet_splitting_pipeline()
-    
-    # Use the | operator to compose pipelines
-    return vcf_pipeline | splitting_pipeline
+@pipefunc(
+    output_name=("validated_split_parquet_path", "validated_split_variants_dict"),
+    renames={
+        "vcf_parquet_path": "vcf_parquet_path",
+        "split_variants_dict": "split_variants_dict",
+    },
+)
+def validate_split_outputs(
+    vcf_parquet_path: Array[Path],
+    split_variants_dict: Array[Dict[str, Path]],
+) -> tuple[list[Path], list[Dict[str, Path]]]:
+    """
+    Validate that for each input parquet file we produced split outputs and all
+    referenced files exist. Non-parquet inputs are ignored.
+    """
+    with start_action(action_type="validate_split_outputs") as action:
+        # Normalize to lists
+        parquet_list = [vcf_parquet_path] if isinstance(vcf_parquet_path, Path) else list(vcf_parquet_path)
+        split_list = [split_variants_dict] if isinstance(split_variants_dict, dict) else list(split_variants_dict)
+
+        # Align lengths best-effort; pipefunc mapspec should keep them aligned, but guard anyway
+        if len(split_list) != len(parquet_list):
+            action.log(
+                message_type="warning",
+                reason="length_mismatch",
+                parquet_count=len(parquet_list),
+                split_count=len(split_list),
+            )
+
+        # Validate existence
+        def _is_parquet(p: Path) -> bool:
+            return p.suffix == ".parquet"
+
+        problems: list[str] = []
+        for idx, p in enumerate(parquet_list):
+            if not _is_parquet(p):
+                continue
+            if not p.exists():
+                problems.append(f"missing input parquet: {p}")
+                continue
+            # Get corresponding split dict if available
+            split_dict = split_list[idx] if idx < len(split_list) else {}
+            if not split_dict:
+                problems.append(f"no splits produced for: {p}")
+                continue
+            # Check that all split files exist
+            missing = [str(out) for out in split_dict.values() if not Path(out).exists()]
+            if missing:
+                problems.append(f"missing split files for {p}: {missing}")
+
+        if problems:
+            action.log(message_type="error", problems=problems)
+            raise FileNotFoundError("; ".join(problems))
+
+        action.log(message_type="info", validated=len(parquet_list))
+        return parquet_list, split_list
+
+
+# Legacy function removed - use PipelineFactory.vcf_splitter() from genobear.pipelines.helpers instead
 
 
 def split_parquet_variants(
@@ -169,7 +219,11 @@ def download_convert_and_split_vcf(
     Returns:
         Dictionary with pipeline results containing 'vcf_parquet_path' and 'split_variants_dict' by default
     """
-    pipeline = make_vcf_splitting_pipeline()
+    # Compose VCF download pipeline with splitting pipeline
+    from genobear.pipelines.vcf_downloader import make_vcf_pipeline
+    vcf_pipeline = make_vcf_pipeline()
+    splitting_pipeline = make_parquet_splitting_pipeline()
+    pipeline = vcf_pipeline | splitting_pipeline
     
     # Default to the most useful outputs including split variants
     if output_names is None:
@@ -194,92 +248,3 @@ def download_convert_and_split_vcf(
             return_results=return_results,
         )
         return results
-
-
-def make_clinvar_splitting_pipeline() -> Pipeline:
-    """Create a pipeline with ClinVar-specific defaults and variant splitting."""
-    from genobear.pipelines.helpers import make_clinvar_pipeline as make_clinvar_helper
-    return make_clinvar_helper(with_splitting=True)
-
-
-def make_ensembl_vcf_splitting_pipeline() -> Pipeline:
-    """Create a pipeline with Ensembl VCF-specific defaults and variant splitting."""
-    from genobear.pipelines.helpers import make_ensembl_pipeline as make_ensembl_helper
-    return make_ensembl_helper(with_splitting=True)
-
-
-if __name__ == "__main__":
-    # Example 1: Split existing parquet files
-    print("=== Parquet Splitting Example ===")
-    parquet_files = [Path("/home/antonkulaga/data/download/clinvar/clinvar.parquet")]
-    
-    if all(p.exists() for p in parquet_files):
-        split_results = split_parquet_variants(
-            vcf_parquet_path=parquet_files,
-            explode_snv_alt=True,
-            write_to=Path("/home/antonkulaga/data/download/split_test")
-        )
-        
-        print("Parquet splitting completed!")
-        print(f"Results: {list(split_results.keys())}")
-        
-        # Print split variant paths
-        if "split_variants_dict" in split_results:
-            split_result = split_results["split_variants_dict"]
-            split_out = split_result.output
-            
-            # Extract split variant dictionaries
-            if hasattr(split_out, "ravel"):
-                split_seq = split_out.ravel().tolist()
-            elif isinstance(split_out, list):
-                split_seq = split_out
-            else:
-                split_seq = [split_out]
-            
-            print(f"\nGenerated split variants for {len(split_seq)} file(s):")
-            for i, split_dict in enumerate(split_seq):
-                if isinstance(split_dict, dict):
-                    print(f"  File {i+1}:")
-                    for tsa, path in split_dict.items():
-                        print(f"    {tsa}: {path}")
-                else:
-                    print(f"  File {i+1}: {split_dict}")
-    else:
-        print("Parquet files not found, skipping parquet splitting example")
-    
-    print("\n" + "="*50)
-    
-    # Example 2: Full pipeline with download, conversion, and splitting
-    print("=== Full Download + Conversion + Splitting Pipeline ===")
-    full_results = download_convert_and_split_vcf(
-        url="https://ftp.ncbi.nlm.nih.gov/pub/clinvar/vcf_GRCh38/",
-        pattern=r"clinvar\.vcf\.gz$",
-        name="clinvar_full_test",
-        dest_dir=Path("/home/antonkulaga/data/download"),
-        explode_snv_alt=True
-    )
-    
-    print("Full pipeline completed!")
-    print(f"Results: {list(full_results.keys())}")
-    
-    # Print split variant paths
-    if "split_variants_dict" in full_results:
-        split_result = full_results["split_variants_dict"]
-        split_out = split_result.output
-        
-        # Extract split variant dictionaries
-        if hasattr(split_out, "ravel"):
-            split_seq = split_out.ravel().tolist()
-        elif isinstance(split_out, list):
-            split_seq = split_out
-        else:
-            split_seq = [split_out]
-        
-        print(f"\nGenerated split variants for {len(split_seq)} file(s):")
-        for i, split_dict in enumerate(split_seq):
-            if isinstance(split_dict, dict):
-                print(f"  File {i+1}:")
-                for tsa, path in split_dict.items():
-                    print(f"    {tsa}: {path}")
-            else:
-                print(f"  File {i+1}: {split_dict}")

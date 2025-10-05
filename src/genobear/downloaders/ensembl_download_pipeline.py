@@ -324,7 +324,7 @@ def split_variants(parquet_files: Dict[str, Path], cache_dir: Path, split: bool,
                     continue
                 
                 df = pl.scan_parquet(parquet_path)
-                tsas = df.select("tsa").unique().collect().to_series().to_list()
+                tsas = df.select("tsa").unique().collect(streaming=True).to_series().to_list()
                 
                 variant_files = {}
                 for tsa in tsas:

@@ -5,15 +5,15 @@ from typing import List
 import pytest
 from eliot import start_action
 
-from genobear.pipelines.vcf_downloader import pipeline, list_paths
+from genobear.pipelines.vcf_downloader import make_vcf_pipeline, list_paths
 
 
 @pytest.mark.integration
 def test_vcf_pipeline_downloads_to_temp(tmp_path: Path) -> None:
     """Integration test for the `vcf_pipeline` using a temporary destination.
 
-    Mirrors the logic from the module's __main__ while preferring a small index file
-    (".tbi") to keep the test lightweight. Falls back to the larger VCF if needed.
+    Mirrors the logic while preferring a small index file (".tbi") to keep the
+    test lightweight. Falls back to the larger VCF if needed.
     """
     base_url = "https://ftp.ncbi.nlm.nih.gov/pub/clinvar/vcf_GRCh38/"
     # Prefer a tiny index file first; fall back to the full VCF if index is unavailable
@@ -25,7 +25,9 @@ def test_vcf_pipeline_downloads_to_temp(tmp_path: Path) -> None:
         preferred_urls = list_paths(url=base_url, pattern=preferred_pattern, file_only=True)
         pattern = preferred_pattern if preferred_urls else fallback_pattern
 
-        # Run pipeline mirroring the __main__ example
+        pipeline = make_vcf_pipeline()
+
+        # Run pipeline
         results = pipeline.map(
             inputs=dict(
                 url=base_url,
@@ -36,14 +38,14 @@ def test_vcf_pipeline_downloads_to_temp(tmp_path: Path) -> None:
                 check_files=True,
                 expiry_time=7 * 24 * 3600,
             ),
-            output_names={"local", "lazy_frame", "parquet_path"},
+            output_names={"validated_vcf_local", "vcf_lazy_frame", "vcf_parquet_path"},
             parallel=True,
             return_results=True,
         )
 
-        local_result = results["local"]
-        parquet_result = results["parquet_path"]
-        lazy_frame_result = results["lazy_frame"]
+        local_result = results["validated_vcf_local"]
+        parquet_result = results["vcf_parquet_path"]
+        lazy_frame_result = results["vcf_lazy_frame"]
 
         # Extract local paths
         local_out = local_result.output

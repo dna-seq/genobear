@@ -16,6 +16,10 @@ logs = Path("logs") if Path("logs").exists() else Path.cwd().parent / "logs"
 
 load_dotenv()
 
+# Set POLARS_VERBOSE from env if not already set (default: 0 for clean output)
+if "POLARS_VERBOSE" not in os.environ:
+    os.environ["POLARS_VERBOSE"] = "0"
+
 from genobear.downloaders import EnsemblDownloader, HuggingFaceUploader
 from genobear.downloaders.multi_vcf_downloader import DownloadResult
 from pycomfort.logging import to_nice_file, to_nice_stdout
@@ -72,11 +76,6 @@ def ensembl(
         "--force",
         help="Force download even if files already exist"
     ),
-    clean_semicolons: bool = typer.Option(
-        True,
-        "--clean-semicolons/--no-clean-semicolons",
-        help="Clean malformed semicolons in VCF files before processing"
-    ),
     use_checksums: bool = typer.Option(
         True,
         "--checksums/--no-checksums",
@@ -86,6 +85,11 @@ def ensembl(
         False,
         "--split/--no-split",
         help="Split downloaded parquet files by variant type and upload the splitted folder"
+    ),
+    run_folder: Optional[str] = typer.Option(
+        None,
+        "--run-folder",
+        help="Optional run folder for pipeline execution (None by default)"
     )
 ):
     """
@@ -118,7 +122,6 @@ def ensembl(
         
         downloader_kwargs = {
             "chromosomes": set(chromosomes) if chromosomes else None,
-            "clean_semicolons": clean_semicolons,
             "use_checksums": use_checksums,
             "force_download": force_download,
             "subdir_name": subdir_name
@@ -215,4 +218,5 @@ def version():
 
 
 if __name__ == "__main__":
+    # Run the main CLI application
     app()

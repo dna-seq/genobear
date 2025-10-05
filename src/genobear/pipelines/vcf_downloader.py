@@ -1,6 +1,7 @@
 import os
 import re
 import shutil
+import time
 from pathlib import Path
 from typing import List, Optional
 
@@ -11,8 +12,10 @@ from aiohttp import ClientResponseError, ClientTimeout
 from eliot import start_action
 from fsspec.exceptions import FSTimeoutError
 from pipefunc import Pipeline, pipefunc
+from pipefunc.typing import Array
 from platformdirs import user_cache_dir
 from tenacity import Retrying, retry_if_exception, stop_after_attempt, wait_exponential
+
 
 from genobear.io import AnnotatedLazyFrame, vcf_to_parquet
 
@@ -26,6 +29,9 @@ def _retryable_http_error(exc: BaseException) -> bool:
     # Response-level status codes that are commonly transient
     if isinstance(exc, ClientResponseError):
         return exc.status in RETRYABLE_STATUS
+    # mmap cache errors are retryable (blockcache corruption)
+    if isinstance(exc, ValueError) and "mmap length is greater than file size" in str(exc):
+        return True
     return False
 
 
@@ -85,7 +91,10 @@ def download_path(
     local = dest_dir / url.rsplit("/", 1)[-1]
     tmp = local.with_suffix(local.suffix + ".part")
 
-    cache_proto = "blockcache" if use_blockcache else "filecache"
+    # Use filecache instead of blockcache to avoid mmap issues with concurrent/parallel downloads
+    # blockcache can fail with "mmap length is greater than file size" when cache files are being created
+    # For now, always use filecache as it's more reliable for parallel downloads
+    cache_proto = "filecache"
     chained_url = f"{cache_proto}::{url}"
 
     http_key = "https" if url.startswith("https://") else "http"
@@ -101,6 +110,21 @@ def download_path(
         http_key: http_layer,
     }
 
+    def _clear_cache_for_url() -> None:
+        """Clear any cached files for this specific URL."""
+        import hashlib
+        # fsspec uses the URL to generate cache filenames
+        url_hash = hashlib.md5(url.encode()).hexdigest()
+        # Try to find and remove any cache files related to this URL
+        for pattern in [f"*{url_hash}*", f"*{url.rsplit('/', 1)[-1]}*"]:
+            cache_files = list(cache_storage.glob(pattern))
+            for cf in cache_files:
+                try:
+                    if cf.is_file():
+                        cf.unlink()
+                except Exception:
+                    pass
+
     def _download_to_tmp_with_retry(destination_tmp: Path) -> None:
         retryer = Retrying(
             retry=retry_if_exception(_retryable_http_error),
@@ -112,14 +136,54 @@ def download_path(
         if destination_tmp.exists():
             destination_tmp.unlink()
 
+        # Get progress logging interval from env (default 10 seconds)
+        log_interval = float(os.getenv("GENOBEAR_PROGRESS_INTERVAL", "10.0"))
+
         for attempt in retryer:
             with attempt:
                 with fsspec.open(chained_url, mode="rb", **storage_options) as src, open(destination_tmp, "wb") as dst:
+                    # Progress tracking with rate limiting
+                    start_time = time.time()
+                    last_log_time = start_time
+                    total_bytes = 0
+                    
                     while True:
                         data = src.read(chunk_size)
                         if not data:
                             break
                         dst.write(data)
+                        total_bytes += len(data)
+                        
+                        # Rate-limited progress logging
+                        current_time = time.time()
+                        if current_time - last_log_time >= log_interval:
+                            mb_downloaded = total_bytes / (1024 * 1024)
+                            elapsed = current_time - start_time
+                            speed_mbps = (total_bytes / (1024 * 1024)) / elapsed if elapsed > 0 else 0
+                            
+                            action.log(
+                                message_type="download_progress",
+                                url=url,
+                                mb_downloaded=round(mb_downloaded, 2),
+                                speed_mbps=round(speed_mbps, 2),
+                                elapsed_seconds=round(elapsed, 1)
+                            )
+                            last_log_time = current_time
+                    
+                    # Log 100% completion with final stats
+                    if total_bytes > 0:
+                        mb_final = total_bytes / (1024 * 1024)
+                        total_elapsed = time.time() - start_time
+                        avg_speed = mb_final / total_elapsed if total_elapsed > 0 else 0
+                        
+                        action.log(
+                            message_type="download_complete",
+                            url=url,
+                            mb_total=round(mb_final, 2),
+                            total_seconds=round(total_elapsed, 1),
+                            avg_speed_mbps=round(avg_speed, 2),
+                            progress_percent=100
+                        )
 
     action_kwargs = {"action_type": "download_path", "url": url, "dest": str(local)}
     if dest_dir_was_provided:
@@ -127,6 +191,14 @@ def download_path(
 
     with start_action(**action_kwargs) as action:
         action.log(message_type="info", step="start_download", url=url, timeout=timeout)
+
+        # If the final file already exists with correct size, skip download
+        if local.exists() and not check_files:
+            action.log(message_type="info", step="skip_existing_file", path=str(local))
+            return local
+
+        # Clear any corrupted cache files before attempting download
+        _clear_cache_for_url()
 
         # Stream from cached reader to tmp, then atomically move into dest_dir
         _download_to_tmp_with_retry(tmp)
@@ -147,7 +219,7 @@ def convert_to_parquet(vcf_path: Path, overwrite: bool = False) -> AnnotatedLazy
     .tbi), the function skips conversion and returns the original path.
     """
     with start_action(action_type="convert_to_parquet", vcf_path=str(vcf_path)) as action:
-        import polars as pl
+        
         
         suffixes = vcf_path.suffixes
         is_index = suffixes and suffixes[-1] in [".tbi", ".csi", ".idx"]
@@ -168,190 +240,183 @@ def convert_to_parquet(vcf_path: Path, overwrite: bool = False) -> AnnotatedLazy
         return lazy_frame, parquet_path
 
 
-def make_vcf_pipeline() -> Pipeline:
-    return Pipeline([list_paths, download_path, convert_to_parquet], print_error=True)
-
-def make_vcf_splitting_pipeline() -> Pipeline:
-    """Create a pipeline that downloads, converts VCF files to parquet, and splits variants by TSA."""
-    from genobear.pipelines.vcf_parquet_splitter import make_parquet_splitting_pipeline
-    
-    # Compose the VCF download pipeline with the splitting pipeline
-    vcf_pipeline = make_vcf_pipeline()
-    splitting_pipeline = make_parquet_splitting_pipeline()
-    
-    # Use the | operator to compose pipelines
-    return vcf_pipeline | splitting_pipeline
-
-def make_clinvar_pipeline() -> Pipeline:
-    """Create a pipeline with ClinVar-specific defaults."""
-    from genobear.pipelines.helpers import make_clinvar_pipeline as make_clinvar_helper
-    return make_clinvar_helper(with_splitting=False)
-
-def make_ensembl_vcf_pipeline() -> Pipeline:
-    """Create a pipeline with Ensembl VCF-specific defaults."""
-    from genobear.pipelines.helpers import make_ensembl_pipeline as make_ensembl_helper
-    return make_ensembl_helper(with_splitting=False)
-
-def make_clinvar_splitting_pipeline() -> Pipeline:
-    """Create a pipeline with ClinVar-specific defaults and variant splitting."""
-    from genobear.pipelines.helpers import make_clinvar_pipeline as make_clinvar_helper
-    return make_clinvar_helper(with_splitting=True)
-
-def make_ensembl_vcf_splitting_pipeline() -> Pipeline:
-    """Create a pipeline with Ensembl VCF-specific defaults and variant splitting."""
-    from genobear.pipelines.helpers import make_ensembl_pipeline as make_ensembl_helper
-    return make_ensembl_helper(with_splitting=True)
-
-def download_and_convert_vcf(
-    url: str,
-    pattern: str | None = None,
-    name: str | Path = "downloads",
-    output_names: set[str] | None = None,
-    parallel: bool = True,
-    return_results: bool = True,
-    **kwargs
-) -> dict:
-    """Download and convert VCF files using the VCF pipeline.
-    
-    Args:
-        url: Base URL to search for VCF files
-        pattern: Regex pattern to filter files (optional)
-        name: Directory name or Path for downloads
-        output_names: Which outputs to return (defaults to lazy_frame and parquet_path only)
-        parallel: Run pipeline in parallel (default True)
-        return_results: Return results dict (default True)
-        **kwargs: Additional parameters passed to pipeline.map()
-    
-    Returns:
-        Dictionary with pipeline results containing 'vcf_lazy_frame' and 'vcf_parquet_path' by default
+@pipefunc(
+    output_name=("validated_urls", "validated_vcf_local", "validated_vcf_parquet_path"),
+    renames={
+        "urls": "urls",
+        "vcf_local": "vcf_local",
+        "vcf_parquet_path": "vcf_parquet_path",
+    },
+)
+def validate_downloads_and_parquet(
+    urls: list[str],
+    vcf_local: Array[Path],
+    vcf_parquet_path: Array[Path],
+) -> tuple[list[str], list[Path], list[Path]]:
     """
-    pipeline = make_vcf_pipeline()
-    
-    # Default to only the most useful outputs
-    if output_names is None:
-        output_names = {"vcf_lazy_frame", "vcf_parquet_path"}
-    
-    inputs = {
-        "url": url,
-        "pattern": pattern,
-        "file_only": True,
-        "name": name,
-        "check_files": True,
-        "expiry_time": 7 * 24 * 3600,  # 7 days
-        **kwargs
-    }
-    
-    with start_action(action_type="download_and_convert_vcf", url=url, name=str(name)):
-        results = pipeline.map(
-            inputs=inputs,
-            output_names=output_names,
-            parallel=parallel,
-            return_results=return_results,
+    Reduce-style validator to ensure that for every discovered URL we have a
+    downloaded local file, and for every downloaded VCF we produced a parquet.
+
+    Also validates the file sizes of downloaded files against expected sizes if available.
+
+    Returns the validated lists to keep them available to downstream steps.
+    """
+    with start_action(action_type="validate_downloads_and_parquet") as action:
+        # Normalize singletons to lists
+        if isinstance(vcf_local, Path):
+            vcf_local_list = [vcf_local]
+        else:
+            vcf_local_list = list(vcf_local)
+
+        if isinstance(vcf_parquet_path, Path):
+            parquet_list = [vcf_parquet_path]
+        else:
+            parquet_list = list(vcf_parquet_path)
+
+        # Filter out non-VCF entries from conversion stage (e.g., .tbi/.csi) which return empty LazyFrame and original path
+        # We consider a file a VCF if name contains .vcf and is not an index
+        def _is_vcf(p: Path) -> bool:
+            suffixes = p.suffixes
+            if not suffixes:
+                return False
+            is_index = suffixes and suffixes[-1] in [".tbi", ".csi", ".idx"]
+            return (".vcf" in suffixes) and (not is_index)
+
+        vcf_files = [p for p in vcf_local_list if _is_vcf(p)]
+
+        # Basic existence checks
+        missing_locals = [p for p in vcf_local_list if not Path(p).exists()]
+        if missing_locals:
+            action.log(message_type="error", missing_locals=[str(p) for p in missing_locals])
+            raise FileNotFoundError(f"Missing downloaded files: {missing_locals}")
+
+        # Ensure each URL has a corresponding local file by filename
+        local_by_name = {Path(p).name: Path(p) for p in vcf_local_list}
+        missing_for_urls: list[tuple[str, str]] = []  # (url, expected_filename)
+        for url in urls:
+            expected_name = url.rsplit("/", 1)[-1]
+            if expected_name not in local_by_name:
+                missing_for_urls.append((url, expected_name))
+        if missing_for_urls:
+            action.log(
+                message_type="error",
+                missing_by_url=[{"url": u, "expected": n} for (u, n) in missing_for_urls],
+            )
+            raise FileNotFoundError(
+                f"No local files matching URLs: {[n for (_, n) in missing_for_urls]}"
+            )
+
+        missing_parquet = [p for p in parquet_list if not Path(p).exists()]
+        # parquet_list may be empty if all inputs were non-VCF (e.g., only indexes matched); that's acceptable.
+        if parquet_list and missing_parquet:
+            action.log(message_type="error", missing_parquet=[str(p) for p in missing_parquet])
+            raise FileNotFoundError(f"Missing parquet files: {missing_parquet}")
+
+        # Heuristic: number of parquet files should be >= number of VCF files converted
+        # (some steps may legitimately skip or deduplicate; we do a soft check/logging)
+        if parquet_list and len(parquet_list) < len(vcf_files):
+            action.log(
+                message_type="warning",
+                reason="fewer_parquets_than_vcfs",
+                vcfs=len(vcf_files),
+                parquets=len(parquet_list),
+            )
+
+        # Validate file sizes using fsspec if possible, matched by filename
+        size_mismatches = []
+        for url in urls:
+            expected_name = url.rsplit("/", 1)[-1]
+            local_path = local_by_name.get(expected_name)
+            if local_path is None:
+                # Already handled above, continue just in case
+                continue
+            try:
+                fs, path = fsspec.core.url_to_fs(url)
+                remote_size = None
+                try:
+                    info = fs.info(path)
+                    remote_size = info.get("size") if isinstance(info, dict) else None
+                except Exception:
+                    # Fallback to fs.size if available
+                    if hasattr(fs, "size"):
+                        remote_size = fs.size(path)
+                if remote_size is not None:
+                    local_size = local_path.stat().st_size
+                    if local_size != remote_size:
+                        size_mismatches.append(
+                            {
+                                "url": url,
+                                "local_path": str(local_path),
+                                "local_size": int(local_size),
+                                "remote_size": int(remote_size),
+                            }
+                        )
+                else:
+                    action.log(
+                        message_type="warning",
+                        reason="remote_size_unavailable",
+                        url=url,
+                        path=str(path),
+                    )
+            except Exception as e:
+                action.log(message_type="warning", reason="size_check_failed", url=url, error=str(e))
+
+        if size_mismatches:
+            action.log(message_type="error", size_mismatches=size_mismatches)
+            def _fmt_size(n: int) -> str:
+                units = ["B", "KB", "MB", "GB", "TB"]
+                size = float(n)
+                for unit in units:
+                    if size < 1024.0 or unit == units[-1]:
+                        return f"{int(size)} {unit}" if unit == "B" else f"{size:.1f} {unit}"
+                    size /= 1024.0
+                return f"{int(n)} B"
+            lines = []
+            for m in size_mismatches:
+                diff = int(m["local_size"]) - int(m["remote_size"])
+                sign = "+" if diff > 0 else ""
+                lines.append(
+                    f"{m['local_path']}: local {_fmt_size(int(m['local_size']))} vs remote {_fmt_size(int(m['remote_size']))} ({sign}{diff} B)"
+                )
+            message = "File size mismatches (" + str(len(size_mismatches)) + "):\n" + "\n".join(lines)
+            raise ValueError(message)
+
+        action.log(
+            message_type="info",
+            urls_count=len(urls),
+            local_count=len(vcf_local_list),
+            parquet_count=len(parquet_list),
         )
-        return results
 
-def download_convert_and_split_vcf(
-    url: str,
-    pattern: str | None = None,
-    name: str | Path = "downloads",
-    output_names: set[str] | None = None,
-    parallel: bool = True,
-    return_results: bool = True,
-    explode_snv_alt: bool = True,
-    **kwargs
-) -> dict:
-    """Download, convert VCF files to parquet, and split variants by TSA using the VCF splitting pipeline.
-    
-    Args:
-        url: Base URL to search for VCF files
-        pattern: Regex pattern to filter files (optional)
-        name: Directory name or Path for downloads
-        output_names: Which outputs to return (defaults to parquet_path and split_variants_dict)
-        parallel: Run pipeline in parallel (default True)
-        return_results: Return results dict (default True)
-        explode_snv_alt: Whether to explode ALT column on "|" separator for SNV variants
-        **kwargs: Additional parameters passed to pipeline.map()
-    
-    Returns:
-        Dictionary with pipeline results containing 'vcf_parquet_path' and 'split_variants_dict' by default
-    """
-    from genobear.pipelines.vcf_parquet_splitter import download_convert_and_split_vcf as download_split
-    return download_split(
-        url=url,
-        pattern=pattern,
-        name=name,
-        output_names=output_names,
-        parallel=parallel,
-        return_results=return_results,
-        explode_snv_alt=explode_snv_alt,
-        **kwargs
+        # Return validated outputs to keep pipeline continuity
+        return urls, vcf_local_list, parquet_list
+
+
+def make_vcf_pipeline() -> Pipeline:
+    """Create the base VCF download + convert + validate pipeline."""
+    return Pipeline(
+        [
+            list_paths,
+            download_path,
+            convert_to_parquet,
+            validate_downloads_and_parquet,
+        ],
+        print_error=True,
+    )
+
+def make_validation_pipeline() -> Pipeline:
+    """Create a pipeline focused solely on validating already downloaded VCF and parquet files."""
+    return Pipeline(
+        [
+            validate_downloads_and_parquet,
+        ],
+        # Keep errors concise; avoid verbose pipefunc error snapshots that list all inputs
+        print_error=False,
     )
 
 if __name__ == "__main__":
-    # Example 1: Simple ClinVar download and conversion
-    print("=== ClinVar Download and Conversion ===")
-    results = download_and_convert_vcf(
-        url="https://ftp.ncbi.nlm.nih.gov/pub/clinvar/vcf_GRCh38/",
-        pattern=r"clinvar\.vcf\.gz$",
-        name="clinvar",
-        dest_dir=Path("/home/antonkulaga/data/download")
-    )
+    from genobear.pipelines.helpers import Pipelines
     
-    print("ClinVar download and conversion completed!")
-    print(f"Results: {list(results.keys())}")
-    
-    # Print parquet paths
-    if "vcf_parquet_path" in results:
-        parquet_result = results["vcf_parquet_path"]
-        parquet_out = parquet_result.output
-        
-        # Extract parquet paths
-        if hasattr(parquet_out, "ravel"):
-            parquet_seq = parquet_out.ravel().tolist()
-        elif isinstance(parquet_out, list):
-            parquet_seq = parquet_out
-        else:
-            parquet_seq = [parquet_out]
-        
-        parquet_paths = [p if isinstance(p, Path) else Path(p) for p in parquet_seq]
-        
-        print(f"\nGenerated {len(parquet_paths)} parquet file(s):")
-        for parquet_path in parquet_paths:
-            print(f"  {parquet_path}")
-    
-    print("\n" + "="*50)
-    
-    # Example 2: ClinVar download, conversion, AND variant splitting
-    print("=== ClinVar Download, Conversion, and Variant Splitting ===")
-    split_results = download_convert_and_split_vcf(
-        url="https://ftp.ncbi.nlm.nih.gov/pub/clinvar/vcf_GRCh38/",
-        pattern=r"clinvar\.vcf\.gz$",
-        name="clinvar_split",
-        dest_dir=Path("/home/antonkulaga/data/download"),
-        explode_snv_alt=True
-    )
-    
-    print("ClinVar download, conversion, and splitting completed!")
-    print(f"Split results: {list(split_results.keys())}")
-    
-    # Print split variant paths
-    if "split_variants_dict" in split_results:
-        split_result = split_results["split_variants_dict"]
-        split_out = split_result.output
-        
-        # Extract split variant dictionaries
-        if hasattr(split_out, "ravel"):
-            split_seq = split_out.ravel().tolist()
-        elif isinstance(split_out, list):
-            split_seq = split_out
-        else:
-            split_seq = [split_out]
-        
-        print(f"\nGenerated split variants for {len(split_seq)} file(s):")
-        for i, split_dict in enumerate(split_seq):
-            if isinstance(split_dict, dict):
-                print(f"  File {i+1}:")
-                for tsa, path in split_dict.items():
-                    print(f"    {tsa}: {path}")
-            else:
-                print(f"  File {i+1}: {split_dict}")
+    print("Running validation for Ensembl downloads...")
+    validation_results = Pipelines.validate_ensembl()
+    print("Validation completed. Results:", validation_results)

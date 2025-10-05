@@ -2,8 +2,10 @@
 """
 Probe script to test and run the Ensembl VCF download pipeline.
 
-This script demonstrates how to use the genobear pipelines to download
-and process Ensembl VCF data.
+This script demonstrates how to use the genobear Pipelines to download
+and process Ensembl VCF data in two ways:
+1. Using Pipelines.download_ensembl() for convenience
+2. Using Pipelines.ensembl() + Pipelines.execute() for custom control
 """
 
 from pathlib import Path
@@ -14,7 +16,7 @@ from dotenv import load_dotenv
 from eliot import start_action
 from pycomfort.logging import to_nice_stdout, to_nice_file
 
-from genobear.pipelines.helpers import download_ensembl, make_ensembl_pipeline
+from genobear import Pipelines
 
 app = typer.Typer(help="Ensembl VCF Download Pipeline Probe")
 
@@ -36,6 +38,11 @@ def main(
         None,
         "--env-file",
         help="Path to .env file to load environment variables from"
+    ),
+    run_folder: Optional[str] = typer.Option(
+        None,
+        "--run-folder",
+        help="Optional run folder for pipeline execution (None by default)"
     )
 ) -> None:
     """Main function to run the Ensembl download pipeline."""
@@ -63,12 +70,13 @@ def main(
             download_dir.mkdir(parents=True, exist_ok=True)
             action.log(message_type="download_dir_configured", message="Download directory configured", download_dir=str(download_dir))
         
-        # Option 1: Use the convenience function
-        action.log(message_type="ensembl_download_start", message="Running Ensembl download using convenience function")
-        results = download_ensembl(
+        # Option 1: Use the Pipelines convenience method
+        action.log(message_type="ensembl_download_start", message="Running Ensembl download using Pipelines")
+        results = Pipelines.download_ensembl(
             dest_dir=download_dir,
-            with_splitting=with_splitting
-            # Note: The Ensembl pipeline has default URL and pattern set in helpers.py
+            with_splitting=with_splitting,
+            run_folder=run_folder
+            # Note: The Ensembl pipeline has default URL and pattern set in Pipelines
         )
         
         action.log(message_type="ensembl_download_complete", message="Ensembl download completed successfully")
@@ -125,14 +133,8 @@ def main(
                              frame_index=i+1, 
                              type=str(type(lf)))
         
-        # Option 2: Use the pipeline directly for more control
-        action.log(message_type="pipeline_alternative", message="Alternative: Using pipeline directly")
-        pipeline = make_ensembl_pipeline(with_splitting=False)
-        action.log(message_type="pipeline_created", 
-                  message="Pipeline created",
-                  functions=[f.__name__ for f in pipeline.functions],
-                  defaults=str(pipeline.defaults))
-        action.log(message_type="pipeline_ready", message="Pipeline ready for custom execution")
+        # Note: If you need lower-level control, construct a pipeline via Pipelines.ensembl()
+        # and execute it with Pipelines.execute() in your own scripts.
 
 
 if __name__ == "__main__":

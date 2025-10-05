@@ -1,15 +1,15 @@
 # GenoBear 🧬
 
-A unified toolkit for downloading, converting, and annotating genomic databases.
+A unified toolkit for downloading, converting, and processing genomic databases.
 
 ## Features
 
-- **Download genomic databases**: dbSNP, ClinVar, ANNOVAR, RefSeq, Exomiser, and HGMD
-- **Convert VCF to Parquet**: Efficient columnar storage for large genomic datasets  
-- **Annotate VCF files**: Add variant annotations from multiple databases
-- **CLI and Python API**: Use via command line or import as a Python library
-- **Unified configuration**: Consistent database paths and discovery
-- **Streaming processing**: Handle large files efficiently with polars-bio
+- **Download genomic databases**: Ensembl, ClinVar, dbSNP, gnomAD
+- **Convert VCF to Parquet**: Efficient columnar storage for large genomic datasets with polars-bio
+- **Split variants by type**: Organize variants by TSA (Trinucleotide Sequence Alteration) for efficient querying
+- **CLI and Python API**: Use via command line or import as a Python library with pipeline-based workflows
+- **Parallel processing**: Download and process multiple chromosome files concurrently
+- **HuggingFace integration**: Upload processed datasets directly to HuggingFace Hub
 
 ## Installation
 
@@ -26,21 +26,62 @@ pip install genobear
 ### CLI Usage
 
 ```bash
-# Download and convert dbSNP database for hg38
-genobear download dbsnp hg38 --parquet
+# Download Ensembl variation VCF files (all chromosomes)
+genobear ensembl
 
-# Download ClinVar database  
-genobear download clinvar hg38 --parquet
+# Download specific chromosomes
+genobear ensembl --chromosomes 1,2,X
 
-# List available databases
-genobear annotate list
+# Download with splitting by variant type
+genobear ensembl --split
 
-# Annotate a VCF file
-genobear annotate single input.vcf.gz --assembly hg38
+# Upload to HuggingFace
+genobear ensembl --split --upload-splitted --hf-token YOUR_TOKEN
 
-# Batch annotate multiple VCF files
-genobear annotate batch *.vcf.gz --assembly hg38
+# Force re-download
+genobear ensembl --force
+
+# Show version
+genobear version
+
+# Get help
+genobear --help
+genobear ensembl --help
 ```
+
+### Pipeline-Based CLI (prepare)
+
+GenoBear also provides a modern pipeline-based CLI that uses the `Pipelines` class:
+
+```bash
+# Download Ensembl with pipeline approach (better parallelization)
+prepare ensembl --split --download-workers 8
+
+# Download ClinVar using pipelines
+prepare clinvar --dest-dir ./my_data
+
+# Download dbSNP with specific build
+prepare dbsnp --build GRCh38 --split
+
+# Download gnomAD v4
+prepare gnomad --version v4
+
+# Control worker counts
+prepare ensembl --workers 4 --download-workers 8 --parquet-workers 2
+
+# Run with custom pipeline run folder for caching
+prepare ensembl --run-folder ./pipeline_cache
+
+# Get help
+prepare --help
+prepare ensembl --help
+```
+
+**Benefits of `prepare` over `download`:**
+- Better parallelization with separate worker controls for downloads vs. processing
+- Pipeline caching support with `--run-folder`
+- More flexible configuration options
+- Unified runtime with environment-based configuration
 
 ### Python API Usage
 
@@ -48,91 +89,103 @@ genobear annotate batch *.vcf.gz --assembly hg38
 import genobear as gb
 from pathlib import Path
 
-# Download and convert databases (defaults to hg38)
-gb.download_and_convert_dbsnp()  # Downloads hg38, release b156
-gb.download_and_convert_clinvar()  # Downloads hg38
+# Download and convert ClinVar (GRCh38)
+results = gb.Pipelines.download_clinvar()
 
-# For specific assemblies
-gb.download_and_convert_dbsnp(assemblies=["hg19"], releases=["b156"])
-gb.download_and_convert_clinvar(assemblies=["hg19"])
+# Download and convert dbSNP (GRCh38)
+results = gb.Pipelines.download_dbsnp(build="GRCh38")
 
-# Annotate VCF files
-vcf_file = Path("input.vcf.gz")
-result = gb.annotate_vcf(
-    vcf_path=vcf_file,
-    database_types=["dbsnp", "clinvar"],
-    assembly="hg38"
+# Download and convert Ensembl variations with splitting by variant type
+results = gb.Pipelines.download_ensembl(with_splitting=True)
+
+# Download gnomAD data
+results = gb.Pipelines.download_gnomad(version="v4")
+
+# Split existing parquet files by variant type
+from pathlib import Path
+parquet_files = [Path("clinvar.parquet")]
+results = gb.Pipelines.split_existing_parquets(
+    parquet_files=parquet_files,
+    explode_snv_alt=True
 )
 
-# Discover available databases
-databases = gb.discover_databases(assembly="hg38")
-print(f"Available databases: {list(databases.keys())}")
+# Create custom pipelines
+pipeline = gb.Pipelines.clinvar(with_splitting=True)
+results = gb.Pipelines.execute(
+    pipeline=pipeline,
+    inputs={"dest_dir": Path("./my_data")},
+    parallel=True
+)
 ```
 
 ## Supported Databases
 
-- **dbSNP**: Single Nucleotide Polymorphism Database
+- **Ensembl**: Ensembl Variation Database (VCF files for all chromosomes)
 - **ClinVar**: Clinical Variation Database  
-- **ANNOVAR**: Functional annotation databases
-- **RefSeq**: Reference Sequence Database
-- **Exomiser**: Variant prioritization tool
-- **HGMD**: Human Gene Mutation Database (license required)
+- **dbSNP**: Single Nucleotide Polymorphism Database
+- **gnomAD**: Genome Aggregation Database (population genetics)
 
 ### Assembly Support
-- **hg38** (GRCh38) - Default
-- **hg19** (GRCh37) - Legacy support
+- **GRCh38** (hg38) - Default, modern standard
+- **GRCh37** (hg19) - Available for dbSNP
 
 ## Configuration
 
 GenoBear uses environment variables for configuration:
 
 ```bash
-export GENOBEAR_BASE_FOLDER="~/genobear"              # Base folder for all data
-export GENOBEAR_DEFAULT_ASSEMBLY="hg38"              # Default genome assembly  
-export GENOBEAR_DEFAULT_DBSNP_RELEASE="b156"         # Default dbSNP release
-export GENOBEAR_MAX_CONCURRENT_DOWNLOADS="3"         # Concurrent downloads
-export GENOBEAR_PARQUET_BATCH_SIZE="100000"          # Parquet conversion batch size
+export GENOBEAR_FOLDER="~/genobear"                  # Base folder for all cache/data
+export GENOBEAR_DOWNLOAD_WORKERS="8"                 # Number of parallel download workers (default: CPU count)
+export GENOBEAR_PARQUET_WORKERS="4"                  # Number of workers for parquet operations - conversion & splitting (default: 4)
+export GENOBEAR_WORKERS="4"                          # Number of workers for general processing (default: CPU count)
+export GENOBEAR_DOWNLOAD_TIMEOUT="3600"              # Download timeout in seconds (default: 1 hour)
+export GENOBEAR_PROGRESS_INTERVAL="10"               # Progress update interval in seconds during downloads (default: 10)
+export POLARS_VERBOSE="0"                            # Polars progress output: 0=disabled (clean), 1=enabled (shows rows/s)
+export HF_TOKEN="your_huggingface_token"             # HuggingFace token for uploads
 ```
+
+Create a `.env` file in your project root to set these permanently (see `.env.example`).
 
 ## Directory Structure
 
+By default, GenoBear uses platform-specific cache directories (via `platformdirs`):
+
 ```
-~/genobear/
-├── databases/
-│   ├── dbsnp/
-│   │   └── hg38/
-│   │       └── b156/
-│   │           ├── *.vcf.gz
-│   │           └── dbsnp_hg38_b156.parquet
-│   ├── clinvar/
-│   │   └── hg38/
-│   │       └── latest/
-│   │           ├── *.vcf.gz  
-│   │           └── clinvar_hg38.parquet
+~/.cache/genobear/  (Linux)
+~/Library/Caches/genobear/  (macOS)
+├── ensembl_vcf/
+│   ├── homo_sapiens-chr1.vcf.gz
+│   ├── homo_sapiens-chr1.parquet
+│   ├── homo_sapiens-chr2.vcf.gz
+│   ├── homo_sapiens-chr2.parquet
 │   └── ...
-├── output/
-│   ├── vcf_files/
-│   │   ├── sample1.annotated.vcf
-│   │   └── sample2.annotated.vcf
-│   └── *.annotated.vcf
-└── logs/
-    └── genobear.log
+├── clinvar/
+│   ├── clinvar.vcf.gz
+│   └── clinvar.parquet
+├── dbsnp_grch38/
+│   ├── *.vcf.gz
+│   └── *.parquet
+└── splitted/
+    ├── SNV/
+    ├── INS/
+    ├── DEL/
+    └── ...
 ```
 
 ## Architecture
 
-GenoBear features a clean, refactored architecture that eliminates code duplication:
+GenoBear uses a pipeline-based architecture powered by `pipefunc` for composable, parallel genomic data workflows:
 
-### Base Classes
-- **`DatabaseDownloader`** - Abstract base class for all database downloaders
-- **`VcfDatabaseDownloader`** - Base class for VCF-based databases (dbSNP, ClinVar)  
-- **`ArchiveDatabaseDownloader`** - Base class for archive-based databases (ANNOVAR, Exomiser)
+### Core Components
+- **`Pipelines`** - Static class providing pre-configured pipelines for popular databases
+- **Pipeline Functions** - Modular functions for downloading, converting, validating, and splitting VCF data
+- **Runtime Execution** - Unified executor configuration with environment-based parallelism controls
 
-### Key Improvements
-1. **Assembly-Specific Downloaders** - Each downloader handles one assembly
-2. **Default to hg38** - Modern standard as default
-3. **Simplified APIs** - No factory pattern, direct instantiation
-4. **Cleaner Interface** - Assembly as a simple parameter
+### Key Features
+1. **Composable Pipelines** - Chain operations: Download → Convert → Validate → Split
+2. **Parallel Execution** - Concurrent processing of multiple chromosomes/files
+3. **Caching & Validation** - Smart caching with checksum validation and expiry times
+4. **Type Safety** - Full type hints and structured logging with Eliot
 
 ## Development
 
@@ -189,24 +242,38 @@ uv run pytest -m ""
 | Database | File Size | Test Strategy |
 |----------|-----------|---------------|
 | **ClinVar** | 50-200MB | ✅ Default testing |
+| **Ensembl** | 10-500MB per chr | ✅ Default testing (selective chromosomes) |
 | **dbSNP** | 3-8GB | ❌ Manual testing only |
-| **ANNOVAR** | Varies | 🔄 Evaluate per dataset |
-| **Exomiser** | 1-3GB | 🔄 Consider manual only |
+| **gnomAD** | 1-3GB per chr | 🔄 Manual testing recommended |
 
-### Migration from Legacy Code
+### Pipeline API Examples
 
-For new code, use the simplified interface:
 ```python
-from genobear.databases.clinvar import ClinVarDownloader, download_clinvar
-from genobear.databases.dbsnp import DbSnpDownloader, download_dbsnp
+import genobear as gb
 
-# Simple function interface (defaults to hg38)
-results = await download_clinvar()
-results = await download_dbsnp()
+# Quick download with defaults
+results = gb.Pipelines.download_clinvar()
 
-# Class interface for more control  
-downloader = ClinVarDownloader(assembly="hg38")
-results = await downloader.download()
+# Download with splitting and custom directory
+results = gb.Pipelines.download_ensembl(
+    dest_dir=Path("./my_data"),
+    with_splitting=True
+)
+
+# Create custom pipeline with specific steps
+pipeline = gb.Pipelines.clinvar(with_splitting=False)
+results = gb.Pipelines.execute(
+    pipeline=pipeline,
+    inputs={"timeout": 7200},
+    parallel=True,
+    download_workers=8
+)
+
+# Split already-downloaded parquet files
+results = gb.Pipelines.split_existing_parquets(
+    parquet_files=[Path("data.parquet")],
+    explode_snv_alt=True
+)
 ```
 
 ## License

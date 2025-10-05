@@ -81,7 +81,7 @@ class ParquetPostprocessorMixin:
         start_time = time.time()
         
         with start_action(action_type="split_variants", explode_snv_alt=explode_snv_alt) as action:
-            tsas = df.select("tsa").unique().collect().to_series().to_list()
+            tsas = df.select("tsa").unique().collect(streaming=True).to_series().to_list()
             action.log(message_type="info", tsas=tsas, explode_snv_alt=explode_snv_alt)
             result = {}
             for tsa in tsas:
