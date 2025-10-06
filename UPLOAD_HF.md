@@ -9,6 +9,7 @@ The upload pipeline intelligently uploads parquet files to Hugging Face Hub by:
 2. Only uploading files that differ in size
 3. Supporting parallel uploads for efficiency
 4. Providing detailed logging and progress tracking
+5. Preserving directory structure (e.g., split variants by type: `deletion/`, `SNV/`, `indel/`, etc.)
 
 ## Prerequisites
 
@@ -43,17 +44,26 @@ You need write access to the target repositories:
 prepare upload-ensembl
 ```
 
-#### Upload from Custom Directory:
+**Upload from Custom Directory:**
 ```bash
 prepare upload-ensembl --source-dir /path/to/parquet/files
 ```
 
-#### Upload to Different Repository:
+**Combined Download and Upload:**
+```bash
+# Download, split by variant type, and immediately upload to Hugging Face
+prepare ensembl --split --upload
+
+# Download to custom directory and upload to custom repo
+prepare ensembl --dest-dir /data/ensembl --split --upload --repo-id username/my-ensembl
+```
+
+**Upload to Different Repository:**
 ```bash
 prepare upload-ensembl --repo-id username/my-dataset
 ```
 
-#### With Custom Pattern:
+**With Custom Pattern:**
 ```bash
 # Upload only SNV files
 prepare upload-ensembl --pattern "**/SNV/*.parquet"
@@ -62,7 +72,7 @@ prepare upload-ensembl --pattern "**/SNV/*.parquet"
 prepare upload-ensembl --pattern "**/*chr21*.parquet"
 ```
 
-#### With Custom Workers:
+**With Custom Workers:**
 ```bash
 prepare upload-ensembl --workers 8
 ```

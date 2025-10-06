@@ -739,48 +739,24 @@ class PreparationPipelines:
                 num_files=len(parquet_files)
             )
             
-            pipeline = PreparationPipelines.hf_uploader()
+            # Use upload_parquet_to_hf which handles directory structure preservation
+            # This now uses batch upload - all files in ONE commit!
+            from genobear.pipelines.preparation.huggingface_uploader import upload_parquet_to_hf
             
-            # Prepare inputs for parallel upload
-            # Note: path_in_repo is not in the mapspec, so we let the function compute it
-            # from the filename. It will use "data/{filename}" by default.
-            
-            inputs = {
-                "parquet_files": parquet_files,
-                "repo_id": repo_id,
-                "repo_type": "dataset",
-                "path_in_repo": None,  # Let function compute from filename
-                "token": token,
+            results = upload_parquet_to_hf(
+                parquet_files=parquet_files,
+                repo_id=repo_id,
+                repo_type="dataset",
+                token=token,
+                path_prefix=path_prefix,
+                source_dir=source_dir,  # Pass source_dir to preserve directory structure
                 **kwargs
-            }
+            )
             
-            # For upload pipeline, use simple default executor (not VCF-specific)
-            from concurrent.futures import ThreadPoolExecutor
-            upload_executor = ThreadPoolExecutor(max_workers=workers)
-            
-            try:
-                results = PreparationPipelines.execute(
-                    pipeline=pipeline,
-                    inputs=inputs,
-                    output_names={"uploaded_files"},
-                    run_folder=None,
-                    return_results=True,
-                    show_progress="rich" if log else False,
-                    parallel=True,
-                    executors={"": upload_executor},  # Use simple default executor for upload
-                )
-            finally:
-                upload_executor.shutdown(wait=True)
-            
-            # Summarize results
+            # Get results from batch upload
             uploaded_files = results.get("uploaded_files", [])
-            if hasattr(uploaded_files, "output"):
-                uploaded_files = uploaded_files.output
-            if hasattr(uploaded_files, "ravel"):
-                uploaded_files = uploaded_files.ravel().tolist()
-            
-            num_uploaded = sum(1 for r in uploaded_files if r.get("uploaded", False))
-            num_skipped = len(uploaded_files) - num_uploaded
+            num_uploaded = results.get("num_uploaded", 0)
+            num_skipped = results.get("num_skipped", 0)
             
             action.log(
                 message_type="summary",
@@ -862,48 +838,24 @@ class PreparationPipelines:
                 num_files=len(parquet_files)
             )
             
-            pipeline = PreparationPipelines.hf_uploader()
+            # Use upload_parquet_to_hf which handles directory structure preservation
+            # This now uses batch upload - all files in ONE commit!
+            from genobear.pipelines.preparation.huggingface_uploader import upload_parquet_to_hf
             
-            # Prepare inputs for parallel upload
-            # Note: path_in_repo is not in the mapspec, so we let the function compute it
-            # from the filename. It will use "data/{filename}" by default.
-            
-            inputs = {
-                "parquet_files": parquet_files,
-                "repo_id": repo_id,
-                "repo_type": "dataset",
-                "path_in_repo": None,  # Let function compute from filename
-                "token": token,
+            results = upload_parquet_to_hf(
+                parquet_files=parquet_files,
+                repo_id=repo_id,
+                repo_type="dataset",
+                token=token,
+                path_prefix=path_prefix,
+                source_dir=source_dir,  # Pass source_dir to preserve directory structure
                 **kwargs
-            }
+            )
             
-            # For upload pipeline, use simple default executor (not VCF-specific)
-            from concurrent.futures import ThreadPoolExecutor
-            upload_executor = ThreadPoolExecutor(max_workers=workers)
-            
-            try:
-                results = PreparationPipelines.execute(
-                    pipeline=pipeline,
-                    inputs=inputs,
-                    output_names={"uploaded_files"},
-                    run_folder=None,
-                    return_results=True,
-                    show_progress="rich" if log else False,
-                    parallel=True,
-                    executors={"": upload_executor},  # Use simple default executor for upload
-                )
-            finally:
-                upload_executor.shutdown(wait=True)
-            
-            # Summarize results
+            # Get results from batch upload
             uploaded_files = results.get("uploaded_files", [])
-            if hasattr(uploaded_files, "output"):
-                uploaded_files = uploaded_files.output
-            if hasattr(uploaded_files, "ravel"):
-                uploaded_files = uploaded_files.ravel().tolist()
-            
-            num_uploaded = sum(1 for r in uploaded_files if r.get("uploaded", False))
-            num_skipped = len(uploaded_files) - num_uploaded
+            num_uploaded = results.get("num_uploaded", 0)
+            num_skipped = results.get("num_skipped", 0)
             
             action.log(
                 message_type="summary",

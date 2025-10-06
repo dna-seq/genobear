@@ -97,6 +97,21 @@ def ensembl(
         "--explode-snv-alt/--no-explode-snv-alt",
         help="Explode ALT column for SNV variants when splitting"
     ),
+    upload: bool = typer.Option(
+        False,
+        "--upload/--no-upload",
+        help="Upload parquet files to Hugging Face Hub after processing"
+    ),
+    repo_id: str = typer.Option(
+        "just-dna-seq/ensembl_variations",
+        "--repo-id",
+        help="Hugging Face repository ID for upload"
+    ),
+    token: Optional[str] = typer.Option(
+        None,
+        "--token",
+        help="Hugging Face API token (uses HF_TOKEN env var if not provided)"
+    ),
 ):
     """
     Download Ensembl variation VCF files using the Pipelines approach.
@@ -105,12 +120,16 @@ def ensembl(
     caching, and pipeline composition features.
     
     Downloads VCF files from Ensembl FTP, converts them to parquet, and optionally
-    splits them by variant type.
+    splits them by variant type. Can also upload results directly to Hugging Face Hub.
     
     To download specific chromosomes, use --pattern:
       prepare ensembl --pattern "chr(21|22)"  # chromosomes 21 and 22
       prepare ensembl --pattern "chr(X|Y)"    # sex chromosomes
       prepare ensembl --pattern "chr[1-9]"    # chromosomes 1-9
+    
+    Example with upload:
+      prepare ensembl --split --upload
+      prepare ensembl --upload --repo-id username/my-dataset
     """
     # Configure logging for this command
     if log:
@@ -128,7 +147,8 @@ def ensembl(
             download_workers=download_workers,
             parquet_workers=parquet_workers,
             timeout=timeout,
-            run_folder=run_folder
+            run_folder=run_folder,
+            upload=upload
         )
         
         console.print("🔧 Setting up Ensembl pipeline using Pipelines class...")
@@ -210,6 +230,59 @@ def ensembl(
                         console.print(f"  - {variant_type}: {paths}")
         
         action.log(message_type="success", result_keys=list(results.keys()))
+        
+        # Upload to Hugging Face if requested
+        if upload:
+            console.print("\n🔄 Starting upload to Hugging Face...")
+            console.print(f"📦 Repository: [bold cyan]{repo_id}[/bold cyan]")
+            
+            # Determine upload source directory
+            # If splitting was enabled, upload from splitted_variants subdirectory
+            upload_source_dir = None
+            if dest_dir:
+                upload_source_dir = Path(dest_dir)
+                if split:
+                    upload_source_dir = upload_source_dir / "splitted_variants"
+            elif split:
+                # Default cache location with splitted_variants subdirectory
+                from platformdirs import user_cache_dir
+                user_cache_path = Path(user_cache_dir(appname="genobear"))
+                upload_source_dir = user_cache_path / "ensembl_variations" / "splitted_variants"
+            
+            with Progress(
+                SpinnerColumn(),
+                TextColumn("[progress.description]{task.description}"),
+                console=console,
+                transient=True
+            ) as progress:
+                task = progress.add_task("Uploading files...", total=None)
+                
+                upload_results = PreparationPipelines.upload_ensembl_to_hf(
+                    source_dir=upload_source_dir,
+                    repo_id=repo_id,
+                    token=token,
+                    workers=workers,
+                    log=log,
+                )
+                
+                progress.update(task, description="✅ Upload completed")
+            
+            # Report upload results (now from batch upload)
+            uploaded_files = upload_results.get("uploaded_files", [])
+            num_uploaded = upload_results.get("num_uploaded", 0)
+            num_skipped = upload_results.get("num_skipped", 0)
+            
+            console.print(f"\n📊 Upload Summary:")
+            console.print(f"  - Total files: [bold]{len(uploaded_files)}[/bold]")
+            console.print(f"  - Uploaded: [bold green]{num_uploaded}[/bold green]")
+            console.print(f"  - Skipped (size match): [bold yellow]{num_skipped}[/bold yellow]")
+            
+            action.log(
+                message_type="upload_summary",
+                total=len(uploaded_files),
+                uploaded=num_uploaded,
+                skipped=num_skipped
+            )
 
 
 @app.command()
@@ -317,6 +390,19 @@ def clinvar(
             console.print("\n🔄 Starting upload to Hugging Face...")
             console.print(f"📦 Repository: [bold cyan]{repo_id}[/bold cyan]")
             
+            # Determine upload source directory
+            # If splitting was enabled, upload from splitted_variants subdirectory
+            upload_source_dir = None
+            if dest_dir:
+                upload_source_dir = Path(dest_dir)
+                if split:
+                    upload_source_dir = upload_source_dir / "splitted_variants"
+            elif split:
+                # Default cache location with splitted_variants subdirectory
+                from platformdirs import user_cache_dir
+                user_cache_path = Path(user_cache_dir(appname="genobear"))
+                upload_source_dir = user_cache_path / "clinvar" / "splitted_variants"
+            
             with Progress(
                 SpinnerColumn(),
                 TextColumn("[progress.description]{task.description}"),
@@ -326,7 +412,7 @@ def clinvar(
                 task = progress.add_task("Uploading files...", total=None)
                 
                 upload_results = PreparationPipelines.upload_clinvar_to_hf(
-                    source_dir=Path(dest_dir) if dest_dir else None,
+                    source_dir=upload_source_dir,
                     repo_id=repo_id,
                     token=token,
                     workers=workers,
@@ -335,15 +421,10 @@ def clinvar(
                 
                 progress.update(task, description="✅ Upload completed")
             
-            # Report upload results
+            # Report upload results (now from batch upload)
             uploaded_files = upload_results.get("uploaded_files", [])
-            if hasattr(uploaded_files, "output"):
-                uploaded_files = uploaded_files.output
-            if hasattr(uploaded_files, "ravel"):
-                uploaded_files = uploaded_files.ravel().tolist()
-            
-            num_uploaded = sum(1 for r in uploaded_files if r.get("uploaded", False))
-            num_skipped = len(uploaded_files) - num_uploaded
+            num_uploaded = upload_results.get("num_uploaded", 0)
+            num_skipped = upload_results.get("num_skipped", 0)
             
             console.print(f"\n📊 Upload Summary:")
             console.print(f"  - Total files: [bold]{len(uploaded_files)}[/bold]")
@@ -627,13 +708,8 @@ def upload_clinvar(
         console.print("\n✅ Upload process completed!")
         
         uploaded_files = results.get("uploaded_files", [])
-        if hasattr(uploaded_files, "output"):
-            uploaded_files = uploaded_files.output
-        if hasattr(uploaded_files, "ravel"):
-            uploaded_files = uploaded_files.ravel().tolist()
-        
-        num_uploaded = sum(1 for r in uploaded_files if r.get("uploaded", False))
-        num_skipped = len(uploaded_files) - num_uploaded
+        num_uploaded = results.get("num_uploaded", 0)
+        num_skipped = results.get("num_skipped", 0)
         
         console.print(f"📊 Summary:")
         console.print(f"  - Total files: [bold]{len(uploaded_files)}[/bold]")
@@ -749,13 +825,8 @@ def upload_ensembl(
         console.print("\n✅ Upload process completed!")
         
         uploaded_files = results.get("uploaded_files", [])
-        if hasattr(uploaded_files, "output"):
-            uploaded_files = uploaded_files.output
-        if hasattr(uploaded_files, "ravel"):
-            uploaded_files = uploaded_files.ravel().tolist()
-        
-        num_uploaded = sum(1 for r in uploaded_files if r.get("uploaded", False))
-        num_skipped = len(uploaded_files) - num_uploaded
+        num_uploaded = results.get("num_uploaded", 0)
+        num_skipped = results.get("num_skipped", 0)
         
         console.print(f"📊 Summary:")
         console.print(f"  - Total files: [bold]{len(uploaded_files)}[/bold]")

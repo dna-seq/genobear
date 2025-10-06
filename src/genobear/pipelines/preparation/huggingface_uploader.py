@@ -9,14 +9,14 @@ from pathlib import Path
 from typing import Optional, Dict, List
 from eliot import start_action
 from pipefunc import pipefunc, Pipeline
-from huggingface_hub import HfApi, hf_hub_download, list_repo_files
+from huggingface_hub import HfApi, hf_hub_download, list_repo_files, CommitOperationAdd
 from huggingface_hub.utils import RepositoryNotFoundError, HfHubHTTPError
 
 
 @pipefunc(
     output_name="uploaded_files",
-    renames={"parquet_file": "parquet_files"},
-    mapspec="parquet_files[i] -> uploaded_files[i]",
+    renames={"parquet_file": "parquet_files", "path_in_repo": "path_in_repos"},
+    mapspec="parquet_files[i], path_in_repos[i] -> uploaded_files[i]",
 )
 def upload_to_hf_if_changed(
     parquet_file: Path,
@@ -175,15 +175,15 @@ def collect_parquet_files(
     recursive: bool = True
 ) -> List[Path]:
     """
-    Collect parquet files from a directory.
+    Collect parquet files from a directory, explicitly excluding VCF and other non-parquet files.
     
     Args:
         source_dir: Directory to search for parquet files
-        pattern: Glob pattern for finding files
+        pattern: Glob pattern for finding files (default: **/*.parquet)
         recursive: Whether to search recursively
         
     Returns:
-        List of paths to parquet files
+        List of paths to parquet files (only .parquet extension files)
     """
     with start_action(
         action_type="collect_parquet_files",
@@ -199,13 +199,13 @@ def collect_parquet_files(
             )
             raise FileNotFoundError(f"Directory not found: {source_dir}")
         
-        # Collect files
+        # Collect files matching pattern
         if recursive:
             files = list(source_dir.glob(pattern))
         else:
             files = list(source_dir.glob(pattern.replace("**/", "")))
         
-        # Filter to only parquet files
+        # SAFETY: Filter to ONLY parquet files, explicitly excluding VCF and other formats
         parquet_files = [f for f in files if f.suffix == ".parquet" and f.is_file()]
         
         action.log(
@@ -215,6 +215,165 @@ def collect_parquet_files(
         )
         
         return parquet_files
+
+
+def upload_files_batch(
+    parquet_files: List[Path],
+    repo_id: str,
+    path_in_repos: List[str],
+    repo_type: str = "dataset",
+    token: Optional[str] = None,
+    commit_message: Optional[str] = None,
+) -> Dict[str, any]:
+    """
+    Upload multiple parquet files to HuggingFace in a single atomic commit.
+    
+    This is much more efficient than uploading files one by one, as it:
+    - Creates only ONE commit for all files
+    - Reduces overhead and is faster
+    - Is atomic - either all files upload or none
+    
+    Args:
+        parquet_files: List of local parquet file paths
+        repo_id: Hugging Face repository ID
+        path_in_repos: List of target paths in the repository (same order as parquet_files)
+        repo_type: Type of repository ("dataset", "model", or "space")
+        token: Hugging Face API token
+        commit_message: Custom commit message
+        
+    Returns:
+        Dictionary with upload results for each file
+    """
+    with start_action(
+        action_type="upload_files_batch",
+        repo_id=repo_id,
+        num_files=len(parquet_files)
+    ) as action:
+        api = HfApi(token=token)
+        
+        # Get list of remote files and their sizes
+        action.log(message_type="info", step="fetching_remote_file_list")
+        try:
+            repo_files_info = {}
+            repo_files = list_repo_files(repo_id=repo_id, repo_type=repo_type, token=token)
+            
+            # Get sizes for all remote files we care about
+            paths_to_check = [p for p in path_in_repos if p in repo_files]
+            if paths_to_check:
+                file_infos = api.get_paths_info(
+                    repo_id=repo_id,
+                    paths=paths_to_check,
+                    repo_type=repo_type,
+                )
+                repo_files_info = {info.path: info.size for info in file_infos}
+                
+        except (RepositoryNotFoundError, HfHubHTTPError) as e:
+            action.log(
+                message_type="warning",
+                step="repo_check_failed",
+                error=str(e)
+            )
+            repo_files_info = {}
+        
+        # Determine which files need uploading
+        operations = []
+        upload_results = []
+        
+        for parquet_file, path_in_repo in zip(parquet_files, path_in_repos):
+            local_size = parquet_file.stat().st_size
+            remote_size = repo_files_info.get(path_in_repo)
+            
+            # Check if we need to upload
+            if remote_size is not None and remote_size == local_size:
+                # Skip - sizes match
+                upload_results.append({
+                    "file": str(parquet_file),
+                    "path_in_repo": path_in_repo,
+                    "uploaded": False,
+                    "reason": "size_match",
+                    "local_size": local_size,
+                    "remote_size": remote_size,
+                })
+            else:
+                # Need to upload
+                reason = "new_file" if remote_size is None else "size_differs"
+                operations.append(
+                    CommitOperationAdd(
+                        path_or_fileobj=str(parquet_file),
+                        path_in_repo=path_in_repo,
+                    )
+                )
+                upload_results.append({
+                    "file": str(parquet_file),
+                    "path_in_repo": path_in_repo,
+                    "uploaded": True,
+                    "reason": reason,
+                    "local_size": local_size,
+                    "remote_size": remote_size,
+                })
+        
+        # Upload all files in a single commit
+        if operations:
+            num_uploading = len(operations)
+            total_size_mb = sum(
+                Path(op.path_or_fileobj).stat().st_size 
+                for op in operations
+            ) / (1024 * 1024)
+            
+            action.log(
+                message_type="info",
+                step="creating_commit",
+                num_files=num_uploading,
+                total_size_mb=round(total_size_mb, 2)
+            )
+            
+            if commit_message is None:
+                commit_message = f"Upload {num_uploading} parquet file{'s' if num_uploading > 1 else ''}"
+            
+            try:
+                commit_info = api.create_commit(
+                    repo_id=repo_id,
+                    repo_type=repo_type,
+                    operations=operations,
+                    commit_message=commit_message,
+                )
+                
+                action.log(
+                    message_type="success",
+                    step="commit_created",
+                    commit_url=commit_info.commit_url,
+                    num_files=num_uploading
+                )
+            except Exception as e:
+                action.log(
+                    message_type="error",
+                    step="commit_failed",
+                    error=str(e)
+                )
+                raise
+        else:
+            action.log(
+                message_type="info",
+                step="no_files_to_upload",
+                reason="all_sizes_match"
+            )
+        
+        # Summary
+        num_uploaded = sum(1 for r in upload_results if r["uploaded"])
+        num_skipped = len(upload_results) - num_uploaded
+        
+        action.log(
+            message_type="summary",
+            total_files=len(upload_results),
+            uploaded=num_uploaded,
+            skipped=num_skipped
+        )
+        
+        return {
+            "uploaded_files": upload_results,
+            "num_uploaded": num_uploaded,
+            "num_skipped": num_skipped,
+        }
 
 
 def make_hf_upload_pipeline() -> Pipeline:
@@ -230,6 +389,7 @@ def upload_parquet_to_hf(
     path_prefix: str = "data",
     parallel: bool = True,
     workers: Optional[int] = None,
+    source_dir: Optional[Path] = None,
     **kwargs
 ) -> Dict[str, any]:
     """
@@ -243,6 +403,7 @@ def upload_parquet_to_hf(
         path_prefix: Prefix for paths in the repository (default: "data")
         parallel: Whether to upload files in parallel
         workers: Number of parallel workers
+        source_dir: Source directory to compute relative paths from (preserves directory structure)
         **kwargs: Additional arguments passed to pipeline
         
     Returns:
@@ -258,46 +419,61 @@ def upload_parquet_to_hf(
         if isinstance(parquet_files, Path):
             parquet_files = [parquet_files]
         
-        if workers is None:
-            workers = get_default_workers()
+        # SAFETY: Ensure ONLY parquet files are in the upload list
+        non_parquet = [f for f in parquet_files if f.suffix != ".parquet"]
+        if non_parquet:
+            action.log(
+                message_type="error",
+                step="non_parquet_files_detected",
+                non_parquet_count=len(non_parquet),
+                non_parquet_samples=str(non_parquet[:5])
+            )
+            raise ValueError(
+                f"Only .parquet files can be uploaded. Found {len(non_parquet)} non-parquet files. "
+                f"Examples: {[f.name for f in non_parquet[:3]]}"
+            )
         
-        pipeline = make_hf_upload_pipeline()
+        # Prepare path mappings, preserving directory structure if source_dir is provided
+        path_in_repos = []
+        for f in parquet_files:
+            if source_dir is not None:
+                # Preserve directory structure relative to source_dir
+                try:
+                    relative_path = f.relative_to(source_dir)
+                    # Use POSIX path (forward slashes) for HuggingFace
+                    relative_path_str = relative_path.as_posix()
+                    path_in_repos.append(f"{path_prefix}/{relative_path_str}")
+                except ValueError:
+                    # If file is not relative to source_dir, just use filename
+                    path_in_repos.append(f"{path_prefix}/{f.name}")
+            else:
+                # Just use filename
+                path_in_repos.append(f"{path_prefix}/{f.name}")
         
-        # Prepare path mappings
-        path_in_repos = [f"{path_prefix}/{f.name}" for f in parquet_files]
-        
-        inputs = {
-            "parquet_files": parquet_files,  # This will be renamed to parquet_file by pipefunc
-            "repo_id": [repo_id] * len(parquet_files),
-            "repo_type": [repo_type] * len(parquet_files),
-            "path_in_repo": path_in_repos,
-            "token": [token] * len(parquet_files),
-            **kwargs
-        }
-        
-        results = pipeline.map(
-            inputs=inputs,
-            output_names={"uploaded_files"},
-            parallel=parallel and (workers > 1),
-            return_results=True,
-        )
-        
-        # Summarize results
-        uploaded_files = results.get("uploaded_files", [])
-        if hasattr(uploaded_files, "output"):
-            uploaded_files = uploaded_files.output
-        if hasattr(uploaded_files, "ravel"):
-            uploaded_files = uploaded_files.ravel().tolist()
-        
-        num_uploaded = sum(1 for r in uploaded_files if r.get("uploaded", False))
-        num_skipped = len(uploaded_files) - num_uploaded
-        
+        # Log the upload plan
         action.log(
-            message_type="summary",
-            total_files=len(uploaded_files),
-            uploaded=num_uploaded,
-            skipped=num_skipped
+            message_type="info",
+            step="preparing_upload",
+            num_files=len(parquet_files),
+            sample_paths=path_in_repos[:3] if len(path_in_repos) > 0 else [],
         )
+        
+        # Use batch upload - uploads all files in a single commit (much more efficient!)
+        batch_results = upload_files_batch(
+            parquet_files=parquet_files,
+            repo_id=repo_id,
+            path_in_repos=path_in_repos,
+            repo_type=repo_type,
+            token=token,
+            commit_message=None,  # Auto-generated message
+        )
+        
+        # Format results for compatibility with old API
+        results = {
+            "uploaded_files": batch_results["uploaded_files"],
+            "num_uploaded": batch_results["num_uploaded"],
+            "num_skipped": batch_results["num_skipped"],
+        }
         
         return results
 
