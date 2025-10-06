@@ -38,7 +38,7 @@ def _default_parquet_path(vcf_path: Path) -> Path:
 
 def resolve_genobear_subfolder(subdir_name: str, base: Optional[Union[str, Path]] = None) -> Path:
     """
-    Resolve a subfolder path using the same mechanism as MultiVCFDownloader.
+    Resolve a subfolder path for genobear data storage.
     
     This function provides a consistent way to resolve data storage paths across
     the genobear package, respecting the GENOBEAR_FOLDER environment variable.

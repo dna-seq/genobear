@@ -125,10 +125,10 @@ class Pipelines:
         # Set dbSNP VCF defaults based on build
         if build == "GRCh38":
             base_url = "https://ftp.ncbi.nlm.nih.gov/snp/latest_release/VCF/"
-            pattern = r"GCF_000001405\.38\.gz$"
+            pattern = r"GCF_000001405\.40\.gz$"  # GRCh38.p14 (latest)
         elif build == "GRCh37":
             base_url = "https://ftp.ncbi.nlm.nih.gov/snp/latest_release/VCF/"
-            pattern = r"GCF_000001405\.25\.gz$"
+            pattern = r"GCF_000001405\.25\.gz$"  # GRCh37.p13
         else:
             raise ValueError(f"Unsupported build: {build}. Use 'GRCh38' or 'GRCh37'")
         
@@ -306,16 +306,13 @@ class Pipelines:
         if dest_dir is not None:
             inputs["dest_dir"] = dest_dir
         
-        if with_splitting:
-            output_names = {"vcf_parquet_path", "split_variants_dict"}
-        else:
-            output_names = {"vcf_lazy_frame", "vcf_parquet_path"}
-        
+        # Don't specify output_names - let the full pipeline run to avoid subpipeline optimization issues
+        # The pipeline will return all leaf node outputs
         with start_action(action_type="download_clinvar", with_splitting=with_splitting, dest_dir=str(dest_dir) if dest_dir else None):
             return Pipelines.execute(
                 pipeline=pipeline,
                 inputs=inputs,
-                output_names=output_names,
+                output_names=None,  # Let pipeline return all outputs
                 run_folder=run_folder,
                 return_results=True,
                 show_progress="rich",
@@ -521,22 +518,19 @@ class Pipelines:
         if dest_dir is not None:
             inputs["dest_dir"] = dest_dir
         
-        if with_splitting:
-            output_names = {"vcf_parquet_path", "split_variants_dict"}
-        else:
-            output_names = {"vcf_lazy_frame", "vcf_parquet_path"}
-        
         if log:
             to_nice_stdout()
             log_dir = Path("logs")
             log_dir.mkdir(exist_ok=True)
             to_nice_file(log_dir / "download_dbsnp.json", log_dir / "download_dbsnp.log")
         
+        # Don't specify output_names - let the full pipeline run to avoid subpipeline optimization issues
+        # The pipeline will return all leaf node outputs
         with start_action(action_type="download_dbsnp", with_splitting=with_splitting, build=build, dest_dir=str(dest_dir) if dest_dir else None):
             return Pipelines.execute(
                 pipeline=pipeline,
                 inputs=inputs,
-                output_names=output_names,
+                output_names=None,  # Let pipeline return all outputs
                 run_folder=run_folder,
                 return_results=True,
                 show_progress="rich",
@@ -595,22 +589,19 @@ class Pipelines:
         if dest_dir is not None:
             inputs["dest_dir"] = dest_dir
         
-        if with_splitting:
-            output_names = {"vcf_parquet_path", "split_variants_dict"}
-        else:
-            output_names = {"vcf_lazy_frame", "vcf_parquet_path"}
-        
         if log:
             to_nice_stdout()
             log_dir = Path("logs")
             log_dir.mkdir(exist_ok=True)
             to_nice_file(log_dir / "download_gnomad.json", log_dir / "download_gnomad.log")
         
+        # Don't specify output_names - let the full pipeline run to avoid subpipeline optimization issues
+        # The pipeline will return all leaf node outputs
         with start_action(action_type="download_gnomad", with_splitting=with_splitting, version=version, dest_dir=str(dest_dir) if dest_dir else None):
             return Pipelines.execute(
                 pipeline=pipeline,
                 inputs=inputs,
-                output_names=output_names,
+                output_names=None,  # Let pipeline return all outputs
                 run_folder=run_folder,
                 return_results=True,
                 show_progress="rich",

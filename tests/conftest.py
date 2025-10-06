@@ -83,10 +83,6 @@ def pytest_configure(config):
 def pytest_collection_modifyitems(config, items):
     """Automatically mark tests based on their characteristics."""
     for item in items:
-        # Mark tests that use network as integration tests
-        if any(fixture in item.fixturenames for fixture in ['clinvar_downloader']):
-            item.add_marker(pytest.mark.integration)
-        
         # Mark tests with 'large' in name as potentially slow
         if 'large' in item.name.lower():
             item.add_marker(pytest.mark.slow)

@@ -1,16 +1,7 @@
-"""Downloaders for various genomic databases and resources."""
+"""Downloaders package - currently empty.
 
-from .dbsnp_downloader import DbSNPDownloader
-from .clinvar_downloader import ClinVarDownloader
-# from .ensembl_variants_downloader import EnsemblVariantsDownloader, EnsemblVariantType
-from .multi_vcf_downloader import MultiVCFDownloader
-from .uploader import HuggingFaceUploader
+Legacy downloaders have been removed. Use the Pipelines class from genobear.pipelines.helpers instead.
+See: genobear.pipelines.helpers.Pipelines for download_clinvar(), download_ensembl(), etc.
+"""
 
-__all__ = [
-    "DbSNPDownloader",
-    "ClinVarDownloader",
-    # "EnsemblVariantsDownloader",
-    # "EnsemblVariantType",
-    "MultiVCFDownloader",
-    "HuggingFaceUploader",
-]
+__all__ = []

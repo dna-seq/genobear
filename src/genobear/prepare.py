@@ -229,9 +229,9 @@ def clinvar(
         "--download-workers",
         help="Number of workers for parallel downloads"
     ),
-    conversion_workers: Optional[int] = typer.Option(
+    parquet_workers: Optional[int] = typer.Option(
         None,
-        "--conversion-workers",
+        "--parquet-workers",
         help="Number of workers for parquet conversion (default: 4)"
     ),
     workers: Optional[int] = typer.Option(
@@ -276,21 +276,13 @@ def clinvar(
         )
         
         console.print("🔧 Setting up ClinVar pipeline...")
-        
-        # Build inputs
-        inputs = {}
-        if dest_dir is not None:
-            inputs["dest_dir"] = Path(dest_dir)
-        if timeout is not None:
-            inputs["timeout"] = timeout
-        
         console.print("🚀 Executing pipeline...")
         
         results = Pipelines.download_clinvar(
             dest_dir=Path(dest_dir) if dest_dir else None,
             with_splitting=split,
             download_workers=download_workers,
-            conversion_workers=conversion_workers,
+            parquet_workers=parquet_workers,
             workers=workers,
             log=log,
             timeout=timeout,
@@ -301,7 +293,7 @@ def clinvar(
         action.log(message_type="success", result_keys=list(results.keys()))
 
 
-@app.command()
+# @app.command()  # Temporarily disabled - not fully implemented
 def dbsnp(
     dest_dir: Optional[str] = typer.Option(
         None,
@@ -323,9 +315,9 @@ def dbsnp(
         "--download-workers",
         help="Number of workers for parallel downloads"
     ),
-    conversion_workers: Optional[int] = typer.Option(
+    parquet_workers: Optional[int] = typer.Option(
         None,
-        "--conversion-workers",
+        "--parquet-workers",
         help="Number of workers for parquet conversion (default: 4)"
     ),
     workers: Optional[int] = typer.Option(
@@ -374,7 +366,7 @@ def dbsnp(
             build=build,
             with_splitting=split,
             download_workers=download_workers,
-            conversion_workers=conversion_workers,
+            parquet_workers=parquet_workers,
             workers=workers,
             log=log,
             timeout=timeout,
@@ -385,7 +377,7 @@ def dbsnp(
         action.log(message_type="success", result_keys=list(results.keys()))
 
 
-@app.command()
+# @app.command()  # Temporarily disabled - not fully implemented
 def gnomad(
     dest_dir: Optional[str] = typer.Option(
         None,
@@ -407,9 +399,9 @@ def gnomad(
         "--download-workers",
         help="Number of workers for parallel downloads"
     ),
-    conversion_workers: Optional[int] = typer.Option(
+    parquet_workers: Optional[int] = typer.Option(
         None,
-        "--conversion-workers",
+        "--parquet-workers",
         help="Number of workers for parquet conversion (default: 4)"
     ),
     workers: Optional[int] = typer.Option(
@@ -458,7 +450,7 @@ def gnomad(
             version=version,
             with_splitting=split,
             download_workers=download_workers,
-            conversion_workers=conversion_workers,
+            parquet_workers=parquet_workers,
             workers=workers,
             log=log,
             timeout=timeout,
