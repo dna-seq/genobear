@@ -26,7 +26,6 @@ dependencies = [
 
 [project.scripts]
 #genobear = "genobear:app"
-download = "genobear.download:app"
 prepare = "genobear.prepare:app"
 annotate = "genobear.annotate:app"
 

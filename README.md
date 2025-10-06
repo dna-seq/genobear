@@ -25,39 +25,17 @@ pip install genobear
 
 ### CLI Usage
 
-```bash
-# Download Ensembl variation VCF files (all chromosomes)
-genobear ensembl
-
-# Download specific chromosomes
-genobear ensembl --chromosomes 1,2,X
-
-# Download with splitting by variant type
-genobear ensembl --split
-
-# Upload to HuggingFace
-genobear ensembl --split --upload-splitted --hf-token YOUR_TOKEN
-
-# Force re-download
-genobear ensembl --force
-
-# Show version
-genobear version
-
-# Get help
-genobear --help
-genobear ensembl --help
-```
-
-### Pipeline-Based CLI (prepare)
-
-GenoBear also provides a modern pipeline-based CLI that uses the `Pipelines` class:
+GenoBear provides a pipeline-based CLI using the `Pipelines` class:
 
 ```bash
-# Download Ensembl with pipeline approach (better parallelization)
+# Download Ensembl variation VCF files (all chromosomes) with better parallelization
 prepare ensembl --split --download-workers 8
 
-# Download ClinVar using pipelines
+# Download specific chromosomes using pattern matching
+prepare ensembl --pattern "chr(21|22|X)"  # chromosomes 21, 22, and X
+prepare ensembl --pattern "chr[1-9]"      # chromosomes 1-9
+
+# Download ClinVar
 prepare clinvar --dest-dir ./my_data
 
 # Download dbSNP with specific build
@@ -66,7 +44,7 @@ prepare dbsnp --build GRCh38 --split
 # Download gnomAD v4
 prepare gnomad --version v4
 
-# Control worker counts
+# Control worker counts for optimal performance
 prepare ensembl --workers 4 --download-workers 8 --parquet-workers 2
 
 # Run with custom pipeline run folder for caching
@@ -77,11 +55,11 @@ prepare --help
 prepare ensembl --help
 ```
 
-**Benefits of `prepare` over `download`:**
+**Key Features:**
 - Better parallelization with separate worker controls for downloads vs. processing
 - Pipeline caching support with `--run-folder`
-- More flexible configuration options
-- Unified runtime with environment-based configuration
+- Flexible configuration options
+- Environment-based configuration for all settings
 
 ### Python API Usage
 

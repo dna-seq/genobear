@@ -47,7 +47,32 @@ def split_variants_by_tsa(
         tsas = df.select("tsa").unique().collect(streaming=True).to_series().to_list()
         action.log(message_type="info", tsas=tsas, explode_snv_alt=explode_snv_alt)
         
+        # Check if all split files already exist
         result: Dict[str, Path] = {}
+        all_exist = True
+        
+        for tsa in tsas:
+            tsa_folder = write_to / tsa
+            where = tsa_folder / f"{stem}.parquet"
+            result[tsa] = where
+            
+            if not where.exists():
+                all_exist = False
+                break
+        
+        # If all split files already exist, skip splitting
+        if all_exist:
+            action.log(
+                message_type="info",
+                step="reusing_existing_splits",
+                split_count=len(result),
+                tsas=tsas
+            )
+            return result
+        
+        # Otherwise, perform splitting
+        action.log(message_type="info", step="performing_split", tsas=tsas)
+        result = {}
         start_time = time.time()
         
         for tsa in tsas:
