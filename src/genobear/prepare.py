@@ -26,7 +26,7 @@ load_dotenv()
 if "POLARS_VERBOSE" not in os.environ:
     os.environ["POLARS_VERBOSE"] = "0"
 
-from genobear import Pipelines
+from genobear import PreparationPipelines
 from pycomfort.logging import to_nice_file, to_nice_stdout
 
 # Create the main CLI app
@@ -134,7 +134,7 @@ def ensembl(
         console.print("🔧 Setting up Ensembl pipeline using Pipelines class...")
         
         # Build pipeline
-        pipeline = Pipelines.ensembl(with_splitting=split)
+        pipeline = PreparationPipelines.ensembl(with_splitting=split)
         
         # Prepare inputs
         inputs = {}
@@ -174,7 +174,7 @@ def ensembl(
         ) as progress:
             task = progress.add_task("Running pipeline...", total=None)
             
-            results = Pipelines.execute(
+            results = PreparationPipelines.execute(
                 pipeline=pipeline,
                 inputs=inputs,
                 output_names=None,  # Get all outputs
@@ -254,12 +254,31 @@ def clinvar(
         "--log/--no-log",
         help="Enable detailed logging to files"
     ),
+    upload: bool = typer.Option(
+        False,
+        "--upload/--no-upload",
+        help="Upload parquet files to Hugging Face Hub after processing"
+    ),
+    repo_id: str = typer.Option(
+        "just-dna-seq/clinvar",
+        "--repo-id",
+        help="Hugging Face repository ID for upload"
+    ),
+    token: Optional[str] = typer.Option(
+        None,
+        "--token",
+        help="Hugging Face API token (uses HF_TOKEN env var if not provided)"
+    ),
 ):
     """
     Download ClinVar VCF files using the Pipelines approach.
     
     Downloads ClinVar data from NCBI FTP, converts to parquet, and optionally
-    splits by variant type.
+    splits by variant type. Can also upload results directly to Hugging Face Hub.
+    
+    Example with upload:
+        prepare clinvar --split --upload
+        prepare clinvar --upload --repo-id username/my-dataset
     """
     if log:
         logs.mkdir(exist_ok=True, parents=True)
@@ -272,13 +291,14 @@ def clinvar(
             dest_dir=dest_dir,
             split=split,
             workers=workers,
-            download_workers=download_workers
+            download_workers=download_workers,
+            upload=upload
         )
         
         console.print("🔧 Setting up ClinVar pipeline...")
         console.print("🚀 Executing pipeline...")
         
-        results = Pipelines.download_clinvar(
+        results = PreparationPipelines.download_clinvar(
             dest_dir=Path(dest_dir) if dest_dir else None,
             with_splitting=split,
             download_workers=download_workers,
@@ -291,6 +311,51 @@ def clinvar(
         
         console.print("✅ ClinVar download completed!")
         action.log(message_type="success", result_keys=list(results.keys()))
+        
+        # Upload to Hugging Face if requested
+        if upload:
+            console.print("\n🔄 Starting upload to Hugging Face...")
+            console.print(f"📦 Repository: [bold cyan]{repo_id}[/bold cyan]")
+            
+            with Progress(
+                SpinnerColumn(),
+                TextColumn("[progress.description]{task.description}"),
+                console=console,
+                transient=True
+            ) as progress:
+                task = progress.add_task("Uploading files...", total=None)
+                
+                upload_results = PreparationPipelines.upload_clinvar_to_hf(
+                    source_dir=Path(dest_dir) if dest_dir else None,
+                    repo_id=repo_id,
+                    token=token,
+                    workers=workers,
+                    log=log,
+                )
+                
+                progress.update(task, description="✅ Upload completed")
+            
+            # Report upload results
+            uploaded_files = upload_results.get("uploaded_files", [])
+            if hasattr(uploaded_files, "output"):
+                uploaded_files = uploaded_files.output
+            if hasattr(uploaded_files, "ravel"):
+                uploaded_files = uploaded_files.ravel().tolist()
+            
+            num_uploaded = sum(1 for r in uploaded_files if r.get("uploaded", False))
+            num_skipped = len(uploaded_files) - num_uploaded
+            
+            console.print(f"\n📊 Upload Summary:")
+            console.print(f"  - Total files: [bold]{len(uploaded_files)}[/bold]")
+            console.print(f"  - Uploaded: [bold green]{num_uploaded}[/bold green]")
+            console.print(f"  - Skipped (size match): [bold yellow]{num_skipped}[/bold yellow]")
+            
+            action.log(
+                message_type="upload_summary",
+                total=len(uploaded_files),
+                uploaded=num_uploaded,
+                skipped=num_skipped
+            )
 
 
 # @app.command()  # Temporarily disabled - not fully implemented
@@ -361,7 +426,7 @@ def dbsnp(
         
         console.print(f"🔧 Setting up dbSNP pipeline for {build}...")
         
-        results = Pipelines.download_dbsnp(
+        results = PreparationPipelines.download_dbsnp(
             dest_dir=Path(dest_dir) if dest_dir else None,
             build=build,
             with_splitting=split,
@@ -445,7 +510,7 @@ def gnomad(
         
         console.print(f"🔧 Setting up gnomAD {version} pipeline...")
         
-        results = Pipelines.download_gnomad(
+        results = PreparationPipelines.download_gnomad(
             dest_dir=Path(dest_dir) if dest_dir else None,
             version=version,
             with_splitting=split,
@@ -459,6 +524,250 @@ def gnomad(
         
         console.print(f"✅ gnomAD {version} download completed!")
         action.log(message_type="success", result_keys=list(results.keys()))
+
+
+@app.command()
+def upload_clinvar(
+    source_dir: Optional[str] = typer.Option(
+        None,
+        "--source-dir",
+        help="Source directory containing parquet files. If not specified, uses default cache location."
+    ),
+    repo_id: str = typer.Option(
+        "just-dna-seq/clinvar",
+        "--repo-id",
+        help="Hugging Face repository ID"
+    ),
+    token: Optional[str] = typer.Option(
+        None,
+        "--token",
+        help="Hugging Face API token. If not provided, uses HF_TOKEN environment variable."
+    ),
+    pattern: str = typer.Option(
+        "**/*.parquet",
+        "--pattern",
+        help="Glob pattern for finding parquet files"
+    ),
+    path_prefix: str = typer.Option(
+        "data",
+        "--path-prefix",
+        help="Prefix for paths in the repository"
+    ),
+    workers: Optional[int] = typer.Option(
+        None,
+        "--workers",
+        help="Number of parallel workers for uploads"
+    ),
+    log: bool = typer.Option(
+        True,
+        "--log/--no-log",
+        help="Enable detailed logging to files"
+    ),
+):
+    """
+    Upload ClinVar parquet files to Hugging Face Hub.
+    
+    Only uploads files that differ in size from remote versions, avoiding
+    unnecessary data transfers. Files are compared by size before upload.
+    
+    Requires HF_TOKEN environment variable or --token option for authentication.
+    
+    Example:
+        prepare upload-clinvar --source-dir /path/to/parquet/files
+        prepare upload-clinvar --repo-id username/my-dataset
+    """
+    if log:
+        logs.mkdir(exist_ok=True, parents=True)
+        to_nice_file(logs / "upload_clinvar.json", logs / "upload_clinvar.log")
+        to_nice_stdout()
+    
+    with start_action(action_type="upload_clinvar_command") as action:
+        action.log(
+            message_type="info",
+            source_dir=source_dir,
+            repo_id=repo_id,
+            pattern=pattern,
+            workers=workers
+        )
+        
+        console.print("🔧 Setting up Hugging Face upload pipeline...")
+        console.print(f"📦 Repository: [bold cyan]{repo_id}[/bold cyan]")
+        
+        if source_dir:
+            console.print(f"📁 Source: [bold blue]{source_dir}[/bold blue]")
+        else:
+            console.print(f"📁 Source: [bold blue]default cache location[/bold blue]")
+        
+        console.print(f"🔍 Pattern: [bold blue]{pattern}[/bold blue]")
+        console.print(f"👷 Workers: [bold blue]{workers or 'auto'}[/bold blue]")
+        
+        console.print("🚀 Starting upload...")
+        
+        with Progress(
+            SpinnerColumn(),
+            TextColumn("[progress.description]{task.description}"),
+            console=console,
+            transient=True
+        ) as progress:
+            task = progress.add_task("Uploading files...", total=None)
+            
+            results = PreparationPipelines.upload_clinvar_to_hf(
+                source_dir=Path(source_dir) if source_dir else None,
+                repo_id=repo_id,
+                token=token,
+                pattern=pattern,
+                path_prefix=path_prefix,
+                workers=workers,
+                log=log,
+            )
+            
+            progress.update(task, description="✅ Upload completed")
+        
+        # Report results
+        console.print("\n✅ Upload process completed!")
+        
+        uploaded_files = results.get("uploaded_files", [])
+        if hasattr(uploaded_files, "output"):
+            uploaded_files = uploaded_files.output
+        if hasattr(uploaded_files, "ravel"):
+            uploaded_files = uploaded_files.ravel().tolist()
+        
+        num_uploaded = sum(1 for r in uploaded_files if r.get("uploaded", False))
+        num_skipped = len(uploaded_files) - num_uploaded
+        
+        console.print(f"📊 Summary:")
+        console.print(f"  - Total files: [bold]{len(uploaded_files)}[/bold]")
+        console.print(f"  - Uploaded: [bold green]{num_uploaded}[/bold green]")
+        console.print(f"  - Skipped (size match): [bold yellow]{num_skipped}[/bold yellow]")
+        
+        action.log(
+            message_type="success",
+            total=len(uploaded_files),
+            uploaded=num_uploaded,
+            skipped=num_skipped
+        )
+
+
+@app.command()
+def upload_ensembl(
+    source_dir: Optional[str] = typer.Option(
+        None,
+        "--source-dir",
+        help="Source directory containing parquet files. If not specified, uses default cache location."
+    ),
+    repo_id: str = typer.Option(
+        "just-dna-seq/ensembl_variations",
+        "--repo-id",
+        help="Hugging Face repository ID"
+    ),
+    token: Optional[str] = typer.Option(
+        None,
+        "--token",
+        help="Hugging Face API token. If not provided, uses HF_TOKEN environment variable."
+    ),
+    pattern: str = typer.Option(
+        "**/*.parquet",
+        "--pattern",
+        help="Glob pattern for finding parquet files"
+    ),
+    path_prefix: str = typer.Option(
+        "data",
+        "--path-prefix",
+        help="Prefix for paths in the repository"
+    ),
+    workers: Optional[int] = typer.Option(
+        None,
+        "--workers",
+        help="Number of parallel workers for uploads"
+    ),
+    log: bool = typer.Option(
+        True,
+        "--log/--no-log",
+        help="Enable detailed logging to files"
+    ),
+):
+    """
+    Upload Ensembl variation parquet files to Hugging Face Hub.
+    
+    Only uploads files that differ in size from remote versions, avoiding
+    unnecessary data transfers. Files are compared by size before upload.
+    
+    Requires HF_TOKEN environment variable or --token option for authentication.
+    
+    Example:
+        prepare upload-ensembl --source-dir /path/to/parquet/files
+        prepare upload-ensembl --repo-id username/my-dataset
+    """
+    if log:
+        logs.mkdir(exist_ok=True, parents=True)
+        to_nice_file(logs / "upload_ensembl.json", logs / "upload_ensembl.log")
+        to_nice_stdout()
+    
+    with start_action(action_type="upload_ensembl_command") as action:
+        action.log(
+            message_type="info",
+            source_dir=source_dir,
+            repo_id=repo_id,
+            pattern=pattern,
+            workers=workers
+        )
+        
+        console.print("🔧 Setting up Hugging Face upload pipeline...")
+        console.print(f"📦 Repository: [bold cyan]{repo_id}[/bold cyan]")
+        
+        if source_dir:
+            console.print(f"📁 Source: [bold blue]{source_dir}[/bold blue]")
+        else:
+            console.print(f"📁 Source: [bold blue]default cache location[/bold blue]")
+        
+        console.print(f"🔍 Pattern: [bold blue]{pattern}[/bold blue]")
+        console.print(f"👷 Workers: [bold blue]{workers or 'auto'}[/bold blue]")
+        
+        console.print("🚀 Starting upload...")
+        
+        with Progress(
+            SpinnerColumn(),
+            TextColumn("[progress.description]{task.description}"),
+            console=console,
+            transient=True
+        ) as progress:
+            task = progress.add_task("Uploading files...", total=None)
+            
+            results = PreparationPipelines.upload_ensembl_to_hf(
+                source_dir=Path(source_dir) if source_dir else None,
+                repo_id=repo_id,
+                token=token,
+                pattern=pattern,
+                path_prefix=path_prefix,
+                workers=workers,
+                log=log,
+            )
+            
+            progress.update(task, description="✅ Upload completed")
+        
+        # Report results
+        console.print("\n✅ Upload process completed!")
+        
+        uploaded_files = results.get("uploaded_files", [])
+        if hasattr(uploaded_files, "output"):
+            uploaded_files = uploaded_files.output
+        if hasattr(uploaded_files, "ravel"):
+            uploaded_files = uploaded_files.ravel().tolist()
+        
+        num_uploaded = sum(1 for r in uploaded_files if r.get("uploaded", False))
+        num_skipped = len(uploaded_files) - num_uploaded
+        
+        console.print(f"📊 Summary:")
+        console.print(f"  - Total files: [bold]{len(uploaded_files)}[/bold]")
+        console.print(f"  - Uploaded: [bold green]{num_uploaded}[/bold green]")
+        console.print(f"  - Skipped (size match): [bold yellow]{num_skipped}[/bold yellow]")
+        
+        action.log(
+            message_type="success",
+            total=len(uploaded_files),
+            uploaded=num_uploaded,
+            skipped=num_skipped
+        )
 
 
 @app.command()

@@ -245,7 +245,7 @@ def download_convert_and_split_vcf(
         Dictionary with pipeline results containing 'vcf_parquet_path' and 'split_variants_dict' by default
     """
     # Compose VCF download pipeline with splitting pipeline
-    from genobear.pipelines.vcf_downloader import make_vcf_pipeline
+    from genobear.pipelines.preparation.vcf_downloader import make_vcf_pipeline
     vcf_pipeline = make_vcf_pipeline()
     splitting_pipeline = make_parquet_splitting_pipeline()
     pipeline = vcf_pipeline | splitting_pipeline

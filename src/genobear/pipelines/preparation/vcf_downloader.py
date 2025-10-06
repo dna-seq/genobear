@@ -415,8 +415,8 @@ def make_validation_pipeline() -> Pipeline:
     )
 
 if __name__ == "__main__":
-    from genobear.pipelines.helpers import Pipelines
+    from genobear import PreparationPipelines
     
     print("Running validation for Ensembl downloads...")
-    validation_results = Pipelines.validate_ensembl()
+    validation_results = PreparationPipelines.validate_ensembl()
     print("Validation completed. Results:", validation_results)
