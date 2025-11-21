@@ -842,6 +842,270 @@ def upload_ensembl(
 
 
 @app.command()
+def update_ensembl_card(
+    source_dir: Optional[str] = typer.Option(
+        None,
+        "--source-dir",
+        help="Source directory to analyze for stats. If not specified, uses default cache location."
+    ),
+    repo_id: str = typer.Option(
+        "just-dna-seq/ensembl_variations",
+        "--repo-id",
+        help="Hugging Face repository ID"
+    ),
+    token: Optional[str] = typer.Option(
+        None,
+        "--token",
+        help="Hugging Face API token. If not provided, uses HF_TOKEN environment variable."
+    ),
+    log: bool = typer.Option(
+        True,
+        "--log/--no-log",
+        help="Enable detailed logging to files"
+    ),
+):
+    """
+    Update only the dataset card (README.md) for Ensembl dataset on Hugging Face Hub.
+    
+    This command generates a new dataset card based on current data statistics
+    and uploads only the README.md file, without touching any parquet files.
+    Useful for updating documentation after editing the template.
+    
+    Example:
+        prepare update-ensembl-card
+        prepare update-ensembl-card --repo-id username/my-dataset
+    """
+    if log:
+        logs.mkdir(exist_ok=True, parents=True)
+        to_nice_file(logs / "update_ensembl_card.json", logs / "update_ensembl_card.log")
+        to_nice_stdout()
+    
+    with start_action(action_type="update_ensembl_card_command") as action:
+        from platformdirs import user_cache_dir
+        from genobear.pipelines.preparation.huggingface_uploader import collect_parquet_files
+        from genobear.pipelines.preparation.dataset_card_generator import generate_ensembl_card
+        from huggingface_hub import HfApi
+        
+        console.print("🔧 Updating Ensembl dataset card...")
+        console.print(f"📦 Repository: [bold cyan]{repo_id}[/bold cyan]")
+        
+        # Determine source directory
+        if source_dir is None:
+            user_cache_path = Path(user_cache_dir(appname="genobear"))
+            base_dir = user_cache_path / "ensembl_variations"
+            splitted_dir = base_dir / "splitted_variants"
+            if splitted_dir.exists() and splitted_dir.is_dir():
+                source_dir = splitted_dir
+            else:
+                source_dir = base_dir
+        else:
+            source_dir = Path(source_dir)
+        
+        console.print(f"📁 Analyzing: [bold blue]{source_dir}[/bold blue]")
+        
+        # Collect files to get statistics
+        parquet_files = collect_parquet_files(source_dir, pattern="**/*.parquet")
+        
+        if not parquet_files:
+            console.print("[yellow]⚠ No parquet files found[/yellow]")
+            action.log(message_type="warning", reason="no_files_found")
+            return
+        
+        # Detect variant types
+        variant_types = set()
+        for f in parquet_files:
+            try:
+                relative = f.relative_to(source_dir)
+                parts = relative.parts
+                if len(parts) > 1:
+                    variant_types.add(parts[0])
+            except ValueError:
+                pass
+        
+        total_size_gb = sum(f.stat().st_size for f in parquet_files) / (1024**3)
+        
+        console.print(f"📊 Statistics:")
+        console.print(f"  - Files: [bold]{len(parquet_files)}[/bold]")
+        console.print(f"  - Size: [bold]{total_size_gb:.1f} GB[/bold]")
+        if variant_types:
+            console.print(f"  - Variant types: [bold]{', '.join(sorted(variant_types))}[/bold]")
+        
+        # Generate dataset card
+        dataset_card = generate_ensembl_card(
+            num_files=len(parquet_files),
+            total_size_gb=total_size_gb,
+            variant_types=list(variant_types) if variant_types else None
+        )
+        
+        action.log(
+            message_type="info",
+            num_files=len(parquet_files),
+            total_size_gb=round(total_size_gb, 2),
+            variant_types=list(variant_types) if variant_types else None,
+            card_size=len(dataset_card)
+        )
+        
+        # Upload only the README
+        console.print("🚀 Uploading dataset card...")
+        
+        import tempfile
+        with tempfile.NamedTemporaryFile(mode='w', suffix='.md', delete=False) as tmp:
+            tmp.write(dataset_card)
+            tmp_path = tmp.name
+        
+        try:
+            api = HfApi(token=token)
+            api.upload_file(
+                path_or_fileobj=tmp_path,
+                path_in_repo="README.md",
+                repo_id=repo_id,
+                repo_type="dataset",
+                commit_message="Update dataset card"
+            )
+            
+            console.print("✅ Dataset card updated successfully!")
+            action.log(message_type="success")
+        finally:
+            import os
+            try:
+                os.unlink(tmp_path)
+            except Exception:
+                pass
+
+
+@app.command()
+def update_clinvar_card(
+    source_dir: Optional[str] = typer.Option(
+        None,
+        "--source-dir",
+        help="Source directory to analyze for stats. If not specified, uses default cache location."
+    ),
+    repo_id: str = typer.Option(
+        "just-dna-seq/clinvar",
+        "--repo-id",
+        help="Hugging Face repository ID"
+    ),
+    token: Optional[str] = typer.Option(
+        None,
+        "--token",
+        help="Hugging Face API token. If not provided, uses HF_TOKEN environment variable."
+    ),
+    log: bool = typer.Option(
+        True,
+        "--log/--no-log",
+        help="Enable detailed logging to files"
+    ),
+):
+    """
+    Update only the dataset card (README.md) for ClinVar dataset on Hugging Face Hub.
+    
+    This command generates a new dataset card based on current data statistics
+    and uploads only the README.md file, without touching any parquet files.
+    Useful for updating documentation after editing the template.
+    
+    Example:
+        prepare update-clinvar-card
+        prepare update-clinvar-card --repo-id username/my-dataset
+    """
+    if log:
+        logs.mkdir(exist_ok=True, parents=True)
+        to_nice_file(logs / "update_clinvar_card.json", logs / "update_clinvar_card.log")
+        to_nice_stdout()
+    
+    with start_action(action_type="update_clinvar_card_command") as action:
+        from platformdirs import user_cache_dir
+        from genobear.pipelines.preparation.huggingface_uploader import collect_parquet_files
+        from genobear.pipelines.preparation.dataset_card_generator import generate_clinvar_card
+        from huggingface_hub import HfApi
+        
+        console.print("🔧 Updating ClinVar dataset card...")
+        console.print(f"📦 Repository: [bold cyan]{repo_id}[/bold cyan]")
+        
+        # Determine source directory
+        if source_dir is None:
+            user_cache_path = Path(user_cache_dir(appname="genobear"))
+            base_dir = user_cache_path / "clinvar"
+            splitted_dir = base_dir / "splitted_variants"
+            if splitted_dir.exists() and splitted_dir.is_dir():
+                source_dir = splitted_dir
+            else:
+                source_dir = base_dir
+        else:
+            source_dir = Path(source_dir)
+        
+        console.print(f"📁 Analyzing: [bold blue]{source_dir}[/bold blue]")
+        
+        # Collect files to get statistics
+        parquet_files = collect_parquet_files(source_dir, pattern="**/*.parquet")
+        
+        if not parquet_files:
+            console.print("[yellow]⚠ No parquet files found[/yellow]")
+            action.log(message_type="warning", reason="no_files_found")
+            return
+        
+        # Detect variant types
+        variant_types = set()
+        for f in parquet_files:
+            try:
+                relative = f.relative_to(source_dir)
+                parts = relative.parts
+                if len(parts) > 1:
+                    variant_types.add(parts[0])
+            except ValueError:
+                pass
+        
+        total_size_gb = sum(f.stat().st_size for f in parquet_files) / (1024**3)
+        
+        console.print(f"📊 Statistics:")
+        console.print(f"  - Files: [bold]{len(parquet_files)}[/bold]")
+        console.print(f"  - Size: [bold]{total_size_gb:.1f} GB[/bold]")
+        if variant_types:
+            console.print(f"  - Variant types: [bold]{', '.join(sorted(variant_types))}[/bold]")
+        
+        # Generate dataset card
+        dataset_card = generate_clinvar_card(
+            num_files=len(parquet_files),
+            total_size_gb=total_size_gb,
+            variant_types=list(variant_types) if variant_types else None
+        )
+        
+        action.log(
+            message_type="info",
+            num_files=len(parquet_files),
+            total_size_gb=round(total_size_gb, 2),
+            variant_types=list(variant_types) if variant_types else None,
+            card_size=len(dataset_card)
+        )
+        
+        # Upload only the README
+        console.print("🚀 Uploading dataset card...")
+        
+        import tempfile
+        with tempfile.NamedTemporaryFile(mode='w', suffix='.md', delete=False) as tmp:
+            tmp.write(dataset_card)
+            tmp_path = tmp.name
+        
+        try:
+            api = HfApi(token=token)
+            api.upload_file(
+                path_or_fileobj=tmp_path,
+                path_in_repo="README.md",
+                repo_id=repo_id,
+                repo_type="dataset",
+                commit_message="Update dataset card"
+            )
+            
+            console.print("✅ Dataset card updated successfully!")
+            action.log(message_type="success")
+        finally:
+            import os
+            try:
+                os.unlink(tmp_path)
+            except Exception:
+                pass
+
+
+@app.command()
 def version():
     """Show version information."""
     try:

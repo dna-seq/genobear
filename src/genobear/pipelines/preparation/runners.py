@@ -706,7 +706,13 @@ class PreparationPipelines:
         if source_dir is None:
             user_cache_path = Path(user_cache_dir(appname="genobear"))
             default_name = "clinvar"
-            source_dir = user_cache_path / default_name
+            base_dir = user_cache_path / default_name
+            # Prefer splitted_variants subdirectory if it exists (preserves variant type structure)
+            splitted_dir = base_dir / "splitted_variants"
+            if splitted_dir.exists() and splitted_dir.is_dir():
+                source_dir = splitted_dir
+            else:
+                source_dir = base_dir
         else:
             source_dir = Path(source_dir)
         
@@ -739,6 +745,34 @@ class PreparationPipelines:
                 num_files=len(parquet_files)
             )
             
+            # Generate dataset card
+            from genobear.pipelines.preparation.dataset_card_generator import generate_clinvar_card
+            
+            # Detect variant types from directory structure
+            variant_types = set()
+            for f in parquet_files:
+                try:
+                    relative = f.relative_to(source_dir)
+                    parts = relative.parts
+                    if len(parts) > 1:
+                        variant_types.add(parts[0])
+                except ValueError:
+                    pass
+            
+            total_size_gb = sum(f.stat().st_size for f in parquet_files) / (1024**3)
+            dataset_card = generate_clinvar_card(
+                num_files=len(parquet_files),
+                total_size_gb=total_size_gb,
+                variant_types=list(variant_types) if variant_types else None
+            )
+            
+            action.log(
+                message_type="info",
+                step="dataset_card_generated",
+                card_size=len(dataset_card),
+                variant_types=list(variant_types) if variant_types else None
+            )
+            
             # Use upload_parquet_to_hf which handles directory structure preservation
             # This now uses batch upload - all files in ONE commit!
             from genobear.pipelines.preparation.huggingface_uploader import upload_parquet_to_hf
@@ -750,6 +784,7 @@ class PreparationPipelines:
                 token=token,
                 path_prefix=path_prefix,
                 source_dir=source_dir,  # Pass source_dir to preserve directory structure
+                dataset_card_content=dataset_card,  # Include dataset card
                 **kwargs
             )
             
@@ -805,7 +840,13 @@ class PreparationPipelines:
         if source_dir is None:
             user_cache_path = Path(user_cache_dir(appname="genobear"))
             default_name = "ensembl_variations"
-            source_dir = user_cache_path / default_name
+            base_dir = user_cache_path / default_name
+            # Prefer splitted_variants subdirectory if it exists (preserves variant type structure)
+            splitted_dir = base_dir / "splitted_variants"
+            if splitted_dir.exists() and splitted_dir.is_dir():
+                source_dir = splitted_dir
+            else:
+                source_dir = base_dir
         else:
             source_dir = Path(source_dir)
         
@@ -838,6 +879,34 @@ class PreparationPipelines:
                 num_files=len(parquet_files)
             )
             
+            # Generate dataset card
+            from genobear.pipelines.preparation.dataset_card_generator import generate_ensembl_card
+            
+            # Detect variant types from directory structure
+            variant_types = set()
+            for f in parquet_files:
+                try:
+                    relative = f.relative_to(source_dir)
+                    parts = relative.parts
+                    if len(parts) > 1:
+                        variant_types.add(parts[0])
+                except ValueError:
+                    pass
+            
+            total_size_gb = sum(f.stat().st_size for f in parquet_files) / (1024**3)
+            dataset_card = generate_ensembl_card(
+                num_files=len(parquet_files),
+                total_size_gb=total_size_gb,
+                variant_types=list(variant_types) if variant_types else None
+            )
+            
+            action.log(
+                message_type="info",
+                step="dataset_card_generated",
+                card_size=len(dataset_card),
+                variant_types=list(variant_types) if variant_types else None
+            )
+            
             # Use upload_parquet_to_hf which handles directory structure preservation
             # This now uses batch upload - all files in ONE commit!
             from genobear.pipelines.preparation.huggingface_uploader import upload_parquet_to_hf
@@ -849,6 +918,7 @@ class PreparationPipelines:
                 token=token,
                 path_prefix=path_prefix,
                 source_dir=source_dir,  # Pass source_dir to preserve directory structure
+                dataset_card_content=dataset_card,  # Include dataset card
                 **kwargs
             )
             

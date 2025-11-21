@@ -11,6 +11,11 @@ from eliot import start_action
 from pipefunc import pipefunc, Pipeline
 from huggingface_hub import HfApi, hf_hub_download, list_repo_files, CommitOperationAdd
 from huggingface_hub.utils import RepositoryNotFoundError, HfHubHTTPError
+from genobear.pipelines.preparation.dataset_card_generator import (
+    generate_ensembl_card, 
+    generate_clinvar_card,
+    save_dataset_card
+)
 
 
 @pipefunc(
@@ -224,6 +229,7 @@ def upload_files_batch(
     repo_type: str = "dataset",
     token: Optional[str] = None,
     commit_message: Optional[str] = None,
+    dataset_card_content: Optional[str] = None,
 ) -> Dict[str, any]:
     """
     Upload multiple parquet files to HuggingFace in a single atomic commit.
@@ -240,6 +246,7 @@ def upload_files_batch(
         repo_type: Type of repository ("dataset", "model", or "space")
         token: Hugging Face API token
         commit_message: Custom commit message
+        dataset_card_content: Optional README.md content to upload as dataset card
         
     Returns:
         Dictionary with upload results for each file
@@ -312,6 +319,27 @@ def upload_files_batch(
                     "remote_size": remote_size,
                 })
         
+        # Add dataset card if provided
+        tmp_readme_path = None
+        if dataset_card_content is not None:
+            import tempfile
+            # Create temporary file for README
+            with tempfile.NamedTemporaryFile(mode='w', suffix='.md', delete=False) as tmp:
+                tmp.write(dataset_card_content)
+                tmp_readme_path = tmp.name
+            
+            operations.append(
+                CommitOperationAdd(
+                    path_or_fileobj=tmp_readme_path,
+                    path_in_repo="README.md",
+                )
+            )
+            action.log(
+                message_type="info",
+                step="adding_dataset_card",
+                card_size=len(dataset_card_content)
+            )
+        
         # Upload all files in a single commit
         if operations:
             num_uploading = len(operations)
@@ -351,6 +379,14 @@ def upload_files_batch(
                     error=str(e)
                 )
                 raise
+            finally:
+                # Clean up temporary README file
+                if tmp_readme_path is not None:
+                    import os
+                    try:
+                        os.unlink(tmp_readme_path)
+                    except Exception:
+                        pass  # Ignore cleanup errors
         else:
             action.log(
                 message_type="info",
@@ -390,6 +426,7 @@ def upload_parquet_to_hf(
     parallel: bool = True,
     workers: Optional[int] = None,
     source_dir: Optional[Path] = None,
+    dataset_card_content: Optional[str] = None,
     **kwargs
 ) -> Dict[str, any]:
     """
@@ -404,6 +441,7 @@ def upload_parquet_to_hf(
         parallel: Whether to upload files in parallel
         workers: Number of parallel workers
         source_dir: Source directory to compute relative paths from (preserves directory structure)
+        dataset_card_content: Optional README.md content to upload as dataset card
         **kwargs: Additional arguments passed to pipeline
         
     Returns:
@@ -466,6 +504,7 @@ def upload_parquet_to_hf(
             repo_type=repo_type,
             token=token,
             commit_message=None,  # Auto-generated message
+            dataset_card_content=dataset_card_content,
         )
         
         # Format results for compatibility with old API

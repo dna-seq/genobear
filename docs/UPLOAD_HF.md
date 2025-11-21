@@ -10,6 +10,7 @@ The upload pipeline intelligently uploads parquet files to Hugging Face Hub by:
 3. Supporting parallel uploads for efficiency
 4. Providing detailed logging and progress tracking
 5. Preserving directory structure (e.g., split variants by type: `deletion/`, `SNV/`, `indel/`, etc.)
+6. **Automatically generating and uploading dataset cards (README.md)** with dataset description, structure, and usage examples
 
 ## Prerequisites
 
@@ -43,6 +44,8 @@ You need write access to the target repositories:
 ```bash
 prepare upload-ensembl
 ```
+
+> **Note:** When using the default cache without specifying `--source-dir`, the uploader will automatically use the `splitted_variants/` subdirectory if it exists. This preserves the variant type directory structure (SNV/, deletion/, indel/, etc.) in the uploaded dataset. If you want to upload the flat parquet files instead, explicitly specify the source directory: `--source-dir ~/.cache/genobear/ensembl_variations`
 
 **Upload from Custom Directory:**
 ```bash
@@ -83,6 +86,8 @@ prepare upload-ensembl --workers 8
 ```bash
 prepare upload-clinvar
 ```
+
+> **Note:** When using the default cache without specifying `--source-dir`, the uploader will automatically use the `splitted_variants/` subdirectory if it exists. This preserves the variant type directory structure (SNV/, deletion/, indel/, etc.) in the uploaded dataset. If you want to upload the flat parquet files instead, explicitly specify the source directory: `--source-dir ~/.cache/genobear/clinvar`
 
 **Upload from Custom Directory:**
 ```bash
@@ -211,6 +216,69 @@ The command provides:
 ```
 
 ## How It Works
+
+### Directory Structure Preservation
+
+When uploading from the default cache location (no `--source-dir` specified), the uploader follows this logic:
+
+1. **Check for Split Variants**: First checks if a `splitted_variants/` subdirectory exists in the cache
+2. **Preserve Structure**: If it exists, uses that directory and preserves the variant type subdirectory structure:
+   ```
+   data/
+   ├── SNV/
+   │   ├── homo_sapiens-chr1.parquet
+   │   ├── homo_sapiens-chr2.parquet
+   │   └── ...
+   ├── deletion/
+   │   ├── homo_sapiens-chr1.parquet
+   │   └── ...
+   ├── indel/
+   │   └── ...
+   ├── insertion/
+   │   └── ...
+   └── substitution/
+       └── ...
+   ```
+3. **Fallback to Flat Structure**: If `splitted_variants/` doesn't exist, uses the main cache directory with flat structure:
+   ```
+   data/
+   ├── homo_sapiens-chr1.parquet
+   ├── homo_sapiens-chr2.parquet
+   └── ...
+   ```
+
+This ensures that if you ran download/split operations (e.g., `prepare ensembl --split`), the upload will automatically preserve that organization.
+
+### Dataset Card Generation
+
+The upload pipeline **automatically generates and uploads a README.md dataset card** for your HuggingFace dataset. The dataset card includes:
+
+- **Description**: What the dataset contains and why Parquet format is used
+- **Structure**: Directory organization and variant types
+- **Usage Examples**: Code snippets for Polars, DuckDB, and genobear
+- **Schema**: Column descriptions
+- **Citations**: How to cite the dataset and original data sources
+- **Metadata**: Dataset tags, license, and size categories for proper HuggingFace discovery
+
+The dataset card is tailored for each dataset type:
+- **Ensembl**: Focuses on variant annotations and genomic variations
+- **ClinVar**: Emphasizes clinical significance and pathogenicity data
+
+#### Template-Based Customization
+
+Dataset cards are generated from **template files** in the `dataset_cards/` directory:
+- `ensembl_card_template.md` - For Ensembl variations
+- `clinvar_card_template.md` - For ClinVar
+
+You can **customize these templates** to modify the dataset description, add custom sections, or change the formatting. The templates support variables like:
+- `{{num_files}}` - Total number of files
+- `{{total_size_gb}}` - Dataset size
+- `{{update_date}}` - Current date
+- `{{variant_types_section}}` - Auto-generated variant types
+
+See `dataset_cards/README.md` for full documentation on template customization.
+
+The card is uploaded in the same commit as the data files, ensuring your dataset is properly documented and discoverable on HuggingFace Hub.
 
 ### Size Comparison Logic
 

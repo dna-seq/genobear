@@ -6,22 +6,22 @@ readme = "README.md"
 authors = [
     { name = "antonkulaga", email = "antonkulaga@gmail.com" }
 ]
-requires-python = ">=3.10"
+requires-python = ">=3.11"
 dependencies = [
-    "aiohttp>=3.12.15",
-    "eliot>=1.17.0",
-    "fsspec>=2025.9.0",
-    "huggingface-hub>=0.34.4",
-    "pipefunc[all]>=0.86.0",
-    "polars-bio>=0.17.2",
+    "aiohttp>=3.13.2",
+    "eliot>=1.17.5",
+    "fsspec>=2025.10.0",
+    "huggingface-hub>=1.1.5",
+    "pipefunc[all]>=0.88.0",
+    "polars-bio>=0.18.0",
     "pooch>=1.8.2",
     "pycomfort>=0.0.18",
-    "pydantic>=2.11.7",
-    "python-dotenv>=1.0.0",
-    "requests>=2.32.4",
-    "rich>=14.1.0",
+    "pydantic>=2.12.4",
+    "python-dotenv>=1.2.1",
+    "requests>=2.32.5",
+    "rich>=14.2.0",
     "tenacity>=9.1.2",
-    "typer>=0.19.2",
+    "typer>=0.20.0",
 ]
 
 [project.scripts]
@@ -41,14 +41,14 @@ allow-direct-references = true
 
 [dependency-groups]
 dev = [
-    "jupyterlab>=4.4.5",
-    "marimo>=0.14.13",
-    "pytest>=8.4.1",
-    "python-lsp-server[all]>=1.13.0",
-    "google-genai>=1.27.0",
-    "ruff>=0.12.7",
-    "sqlglot>=27.5.1",
-    "vegafusion>=2.0.2",
+    "jupyterlab>=4.5.0",
+    "marimo>=0.18.0",
+    "pytest>=9.0.1",
+    "python-lsp-server[all]>=1.13.2",
+    "google-genai>=1.52.0",
+    "ruff>=0.14.6",
+    "sqlglot>=28.0.0",
+    "vegafusion>=2.0.3",
     "vl-convert-python>=1.8.0"
 ]
 
