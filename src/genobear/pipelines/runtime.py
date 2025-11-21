@@ -60,14 +60,25 @@ def default_executors(
     download_workers: Optional[int] = None,
     workers: Optional[int] = None,
     parquet_workers: Optional[int] = None,
+    executor_mode: str = "preparation",
 ):
     """Context manager that yields a pipefunc executors mapping.
 
     Uses ThreadPool for download stages and ProcessPool for parquet and other CPU-bound tasks.
-    Keys:
+    
+    Args:
+        download_workers: Number of workers for I/O-bound downloads
+        workers: Number of workers for general CPU-bound tasks
+        parquet_workers: Number of workers for memory-intensive parquet operations
+        executor_mode: Either "preparation" (for VCF download pipelines) or "annotation" (for annotation pipelines)
+    
+    For preparation mode:
     - "vcf_local": ThreadPoolExecutor(download_workers) - for I/O-bound downloads
     - "vcf_parquet_path": ProcessPoolExecutor(parquet_workers) - for parquet conversion
     - "": default fallback ProcessPoolExecutor(parquet_workers) - for other tasks including splitting
+    
+    For annotation mode:
+    - "": default ProcessPoolExecutor(workers) - for all annotation tasks
     
     Note: We use parquet_workers as the default to ensure memory-intensive operations like
     splitting also use the conservative worker count. The split_variants_dict output uses
@@ -78,39 +89,62 @@ def default_executors(
         workers=workers,
         parquet_workers=parquet_workers
     )
-    # Use parquet_workers for default to ensure all parquet operations use conservative count
-    default_exec = ProcessPoolExecutor(max_workers=parq_workers)
-    # Use threads for I/O-bound download stage
-    download_exec = ThreadPoolExecutor(max_workers=dl_workers)
-    # Use separate pool with conservative worker count for memory-intensive parquet operations
-    parquet_exec = ProcessPoolExecutor(max_workers=parq_workers)
-    # Log configured and actual executor worker counts
-    with start_action(
-        action_type="init_executors",
-        dl_workers=dl_workers,
-        workers=cpu_workers,
-        parquet_workers=parq_workers,
-    ) as action:
-        action.log(
-            message_type="executors_created",
-            download_executor="ThreadPoolExecutor",
-            download_max_workers=getattr(download_exec, "_max_workers", None),
-            parquet_executor="ProcessPoolExecutor",
-            parquet_max_workers=getattr(parquet_exec, "_max_workers", None),
-            default_executor="ProcessPoolExecutor",
-            default_max_workers=getattr(default_exec, "_max_workers", None),
-        )
-    try:
-        yield {
-            "vcf_local": download_exec,
-            "vcf_parquet_path": parquet_exec,
-            "": default_exec,  # Default for all other outputs (including split_variants_dict when present)
-        }
-    finally:
-        # Ensure clean shutdown
-        download_exec.shutdown(wait=True, cancel_futures=False)
-        parquet_exec.shutdown(wait=True, cancel_futures=False)
-        default_exec.shutdown(wait=True, cancel_futures=False)
+    
+    if executor_mode == "preparation":
+        # Use parquet_workers for default to ensure all parquet operations use conservative count
+        default_exec = ProcessPoolExecutor(max_workers=parq_workers)
+        # Use threads for I/O-bound download stage
+        download_exec = ThreadPoolExecutor(max_workers=dl_workers)
+        # Use separate pool with conservative worker count for memory-intensive parquet operations
+        parquet_exec = ProcessPoolExecutor(max_workers=parq_workers)
+        # Log configured and actual executor worker counts
+        with start_action(
+            action_type="init_executors",
+            mode=executor_mode,
+            dl_workers=dl_workers,
+            workers=cpu_workers,
+            parquet_workers=parq_workers,
+        ) as action:
+            action.log(
+                message_type="executors_created",
+                download_executor="ThreadPoolExecutor",
+                download_max_workers=getattr(download_exec, "_max_workers", None),
+                parquet_executor="ProcessPoolExecutor",
+                parquet_max_workers=getattr(parquet_exec, "_max_workers", None),
+                default_executor="ProcessPoolExecutor",
+                default_max_workers=getattr(default_exec, "_max_workers", None),
+            )
+        try:
+            yield {
+                "vcf_local": download_exec,
+                "vcf_parquet_path": parquet_exec,
+                "": default_exec,  # Default for all other outputs (including split_variants_dict when present)
+            }
+        finally:
+            # Ensure clean shutdown
+            download_exec.shutdown(wait=True, cancel_futures=False)
+            parquet_exec.shutdown(wait=True, cancel_futures=False)
+            default_exec.shutdown(wait=True, cancel_futures=False)
+    else:  # annotation mode
+        # Use a single ProcessPoolExecutor for all annotation tasks
+        default_exec = ProcessPoolExecutor(max_workers=cpu_workers)
+        with start_action(
+            action_type="init_executors",
+            mode=executor_mode,
+            workers=cpu_workers,
+        ) as action:
+            action.log(
+                message_type="executors_created",
+                default_executor="ProcessPoolExecutor",
+                default_max_workers=getattr(default_exec, "_max_workers", None),
+            )
+        try:
+            yield {
+                "": default_exec,  # Default for all outputs
+            }
+        finally:
+            # Ensure clean shutdown
+            default_exec.shutdown(wait=True, cancel_futures=False)
 
 
 def run_pipeline(
@@ -125,8 +159,24 @@ def run_pipeline(
     workers: Optional[int] = None,
     parquet_workers: Optional[int] = None,
     executors: Optional[dict] = None,
+    executor_mode: str = "preparation",
 ):
-    """Execute a pipefunc Pipeline with GENOBEAR executors configuration."""
+    """Execute a pipefunc Pipeline with GENOBEAR executors configuration.
+    
+    Args:
+        pipeline: The pipefunc Pipeline to execute
+        inputs: Input parameters for the pipeline
+        output_names: Which outputs to return
+        run_folder: Optional folder for pipeline caching
+        return_results: Whether to return results
+        show_progress: Show progress indicator
+        parallel: Run in parallel mode
+        download_workers: Number of workers for I/O-bound downloads
+        workers: Number of workers for CPU-bound tasks
+        parquet_workers: Number of workers for memory-intensive parquet operations
+        executors: Optional custom executor mapping (overrides auto-configuration)
+        executor_mode: Either "preparation" or "annotation" - determines executor configuration
+    """
     dl_workers, cpu_workers, parq_workers = resolve_worker_counts(
         download_workers=download_workers,
         workers=workers,
@@ -137,11 +187,13 @@ def run_pipeline(
         with default_executors(
             download_workers=dl_workers,
             workers=cpu_workers,
-            parquet_workers=parq_workers
+            parquet_workers=parq_workers,
+            executor_mode=executor_mode,
         ) as exec_map:
             with start_action(
                 action_type="execute_pipeline",
                 run_folder=str(run_folder) if run_folder else None,
+                executor_mode=executor_mode,
                 dl_workers=dl_workers,
                 workers=cpu_workers,
                 parquet_workers=parq_workers
@@ -159,6 +211,7 @@ def run_pipeline(
         with start_action(
             action_type="execute_pipeline",
             run_folder=str(run_folder) if run_folder else None,
+            executor_mode="custom",
             dl_workers=dl_workers,
             workers=cpu_workers,
             parquet_workers=parq_workers

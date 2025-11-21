@@ -8,11 +8,12 @@ from typing import Any
 import warnings
 
 from genobear.pipelines.preparation import PreparationPipelines
+from genobear.pipelines.annotation import AnnotationPipelines
 
 # Backwards compatibility: keep Pipelines as an alias
 Pipelines = PreparationPipelines
 
-__all__ = ["PreparationPipelines", "Pipelines"]
+__all__ = ["PreparationPipelines", "AnnotationPipelines", "Pipelines"]
 
 
 def __getattr__(name: str) -> Any:  # pragma: no cover

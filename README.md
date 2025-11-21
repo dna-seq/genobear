@@ -1,12 +1,13 @@
 # GenoBear 🧬
 
-A unified toolkit for downloading, converting, and processing genomic databases.
+A unified toolkit for downloading, converting, processing, and annotating genomic databases.
 
 ## Features
 
 - **Download genomic databases**: Ensembl, ClinVar, dbSNP, gnomAD
 - **Convert VCF to Parquet**: Efficient columnar storage for large genomic datasets with polars-bio
 - **Split variants by type**: Organize variants by TSA (Trinucleotide Sequence Alteration) for efficient querying
+- **Annotate VCF files**: Annotate your VCF data with reference genomic databases using lazy joins
 - **CLI and Python API**: Use via command line or import as a Python library with pipeline-based workflows
 - **Parallel processing**: Download and process multiple chromosome files concurrently
 - **HuggingFace integration**: Upload processed datasets directly to HuggingFace Hub
@@ -25,7 +26,9 @@ pip install genobear
 
 ### CLI Usage
 
-GenoBear provides a pipeline-based CLI using the `Pipelines` class:
+GenoBear provides two main CLI commands: `prepare` for data preparation and `annotate` for VCF annotation.
+
+#### Data Preparation
 
 ```bash
 # Download Ensembl variation VCF files (all chromosomes) with better parallelization
@@ -55,6 +58,26 @@ prepare --help
 prepare ensembl --help
 ```
 
+#### VCF Annotation
+
+```bash
+# Annotate a VCF file with Ensembl variations
+annotate vcf input.vcf.gz -o annotated.parquet
+
+# Pre-download reference data
+annotate download-reference
+
+# Annotate with custom cache directory
+annotate vcf sample.vcf.gz --cache-dir /data/cache
+
+# Force re-download of reference data
+annotate vcf sample.vcf.gz --force-download
+
+# Get help
+annotate --help
+annotate vcf --help
+```
+
 **Key Features:**
 - Better parallelization with separate worker controls for downloads vs. processing
 - Pipeline caching support with `--run-folder`
@@ -63,36 +86,62 @@ prepare ensembl --help
 
 ### Python API Usage
 
+#### Data Preparation
+
 ```python
 import genobear as gb
 from pathlib import Path
 
 # Download and convert ClinVar (GRCh38)
-results = gb.Pipelines.download_clinvar()
+results = gb.PreparationPipelines.download_clinvar()
 
 # Download and convert dbSNP (GRCh38)
-results = gb.Pipelines.download_dbsnp(build="GRCh38")
+results = gb.PreparationPipelines.download_dbsnp(build="GRCh38")
 
 # Download and convert Ensembl variations with splitting by variant type
-results = gb.Pipelines.download_ensembl(with_splitting=True)
+results = gb.PreparationPipelines.download_ensembl(with_splitting=True)
 
 # Download gnomAD data
-results = gb.Pipelines.download_gnomad(version="v4")
+results = gb.PreparationPipelines.download_gnomad(version="v4")
 
 # Split existing parquet files by variant type
-from pathlib import Path
 parquet_files = [Path("clinvar.parquet")]
-results = gb.Pipelines.split_existing_parquets(
+results = gb.PreparationPipelines.split_existing_parquets(
     parquet_files=parquet_files,
     explode_snv_alt=True
 )
 
 # Create custom pipelines
-pipeline = gb.Pipelines.clinvar(with_splitting=True)
-results = gb.Pipelines.execute(
+pipeline = gb.PreparationPipelines.clinvar(with_splitting=True)
+results = gb.PreparationPipelines.execute(
     pipeline=pipeline,
     inputs={"dest_dir": Path("./my_data")},
     parallel=True
+)
+```
+
+#### VCF Annotation
+
+```python
+from genobear import AnnotationPipelines
+from pathlib import Path
+
+# Annotate a VCF file with Ensembl variations
+results = AnnotationPipelines.annotate_vcf(
+    vcf_path=Path("sample.vcf.gz"),
+    output_path=Path("annotated.parquet"),
+    variant_type="SNV",
+    log=True,
+)
+
+# Access the annotated file
+annotated_path = results["annotated_vcf_path"]
+print(f"Annotated file: {annotated_path}")
+
+# Pre-download reference data
+cache_results = AnnotationPipelines.download_ensembl_reference(
+    cache_dir=Path("/data/cache"),
+    force_download=False,
 )
 ```
 
@@ -253,6 +302,12 @@ results = gb.Pipelines.split_existing_parquets(
     explode_snv_alt=True
 )
 ```
+
+## Documentation
+
+- [Data Preparation Guide](docs/UPLOAD_HF.md): Detailed guide for preparing and uploading genomic databases
+- [VCF Annotation Guide](docs/ANNOTATION.md): Complete guide for annotating VCF files with reference data
+- [Agents Guide](AGENTS.md): Guide for AI agents working with GenoBear
 
 ## License
 
