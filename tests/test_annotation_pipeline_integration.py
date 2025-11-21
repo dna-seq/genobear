@@ -64,38 +64,40 @@ def test_annotation_pipeline_with_local_vcf(tmp_path: Path) -> None:
 
 
 @pytest.mark.integration
-def test_download_ensembl_reference(tmp_path: Path) -> None:
+def test_download_ensembl_reference() -> None:
     """
-    Test downloading ensembl_variations reference data.
+    Test that ensembl_variations reference data cache works properly.
     
-    This test verifies that the reference data can be downloaded
-    and cached properly.
+    This test verifies that the reference data caching mechanism works
+    without unnecessarily downloading data. It uses the existing cache.
     """
-    cache_dir = tmp_path / "ensembl_cache"
-    
     with start_action(
-        action_type="test_download_reference",
-        cache_dir=str(cache_dir)
+        action_type="test_download_reference"
     ) as action:
-        # Download reference data
+        # Use default cache location - don't force download
         results = AnnotationPipelines.download_ensembl_reference(
-            cache_dir=cache_dir,
             log=False,  # Disable logging for test
+            force_download=False,  # Use existing cache, don't download
         )
         
         action.log(
             message_type="info",
-            step="download_completed",
-            result_keys=list(results.keys())
+            step="cache_check_completed",
+            result_keys=list(results.keys()) if results else []
         )
         
         # Verify results
-        assert "ensembl_cache_path" in results, "Expected ensembl_cache_path in results"
+        assert results and "ensembl_cache_path" in results, "Expected ensembl_cache_path in results"
         
+        # Extract the actual path from Result object if needed
         cache_path = results["ensembl_cache_path"]
+        if hasattr(cache_path, "output"):
+            cache_path = cache_path.output
+        
+        cache_path = Path(cache_path)
         assert cache_path.exists(), f"Cache directory not found: {cache_path}"
         
-        # Check that some parquet files were downloaded
+        # Check that parquet files exist in cache
         parquet_files = list(cache_path.rglob("*.parquet"))
         assert len(parquet_files) > 0, "No parquet files found in cache"
         
@@ -103,7 +105,8 @@ def test_download_ensembl_reference(tmp_path: Path) -> None:
             message_type="info",
             step="verification_passed",
             cache_path=str(cache_path),
-            num_parquet_files=len(parquet_files)
+            num_parquet_files=len(parquet_files),
+            message="Cache verified without unnecessary downloads"
         )
 
 

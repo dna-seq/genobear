@@ -189,6 +189,7 @@ class AnnotationPipelines:
                 "repo_id": repo_id,
                 "variant_type": variant_type,
                 "token": token,
+                "force_download": force_download,
             }
             
             if with_save:

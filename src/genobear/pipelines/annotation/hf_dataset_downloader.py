@@ -106,17 +106,19 @@ def ensure_ensembl_cache(
     cache_dir: Optional[Path] = None,
     repo_id: str = "just-dna-seq/ensembl_variations",
     token: Optional[str] = None,
+    force_download: bool = False,
 ) -> Path:
     """
     Ensure ensembl_variations cache exists, downloading if necessary.
     
     This is a convenience function that checks if the cache exists and downloads
-    only if needed (non-forced download).
+    only if needed (unless force_download is True).
     
     Args:
         cache_dir: Local cache directory. If None, uses ~/.cache/genobear/ensembl_variations/splitted_variants
         repo_id: HuggingFace repository ID
         token: HuggingFace API token
+        force_download: If True, force re-download even if cache exists
         
     Returns:
         Path to the local cache directory
@@ -125,6 +127,6 @@ def ensure_ensembl_cache(
         repo_id=repo_id,
         cache_dir=cache_dir,
         token=token,
-        force_download=False,
+        force_download=force_download,
     )
 

@@ -11,36 +11,31 @@ from genobear.io import read_vcf_file
 
 
 @pipefunc(output_name="vcf_chromosomes", cache=False)
-def extract_chromosomes_from_vcf(vcf_path: Union[str, Path]) -> list[str]:
+def extract_chromosomes_from_vcf(vcf_lazy_frame: pl.LazyFrame) -> list[str]:
     """
-    Extract unique chromosome identifiers from a VCF file.
+    Extract unique chromosome identifiers from a VCF LazyFrame efficiently.
     
-    This function reads the VCF file and returns a list of unique chromosome
-    identifiers found in the #CHROM column.
+    This function extracts unique chromosomes by only collecting the chromosome
+    column data, not the entire VCF.
     
     Args:
-        vcf_path: Path to the VCF file (can be .vcf or .vcf.gz)
+        vcf_lazy_frame: LazyFrame containing VCF data
         
     Returns:
         List of unique chromosome identifiers (e.g., ['1', '2', 'X', 'Y'])
         
     Example:
-        >>> chromosomes = extract_chromosomes_from_vcf("sample.vcf.gz")
+        >>> vcf_lf = load_vcf_as_lazy_frame("sample.vcf.gz")
+        >>> chromosomes = extract_chromosomes_from_vcf(vcf_lf)
         >>> print(chromosomes)
         ['1', '2', '3', 'X']
     """
     with start_action(
-        action_type="extract_chromosomes_from_vcf",
-        vcf_path=str(vcf_path)
+        action_type="extract_chromosomes_from_vcf"
     ) as action:
-        # Read VCF file using genobear's read_vcf_file
-        # We don't need INFO fields for chromosome extraction
-        vcf_lazy = read_vcf_file(vcf_path, info_fields=[], save_parquet=None)
-        
-        # Extract unique chromosome values
-        # The VCF reader uses 'chrom' column
+        # Extract unique chromosome values - only materializes the chrom column
         chromosomes = (
-            vcf_lazy
+            vcf_lazy_frame
             .select(pl.col("chrom"))
             .unique()
             .collect()
